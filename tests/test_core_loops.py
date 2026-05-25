@@ -185,3 +185,26 @@ def test_cli_can_run_mcts_self_play_smoke(capsys):
     assert exit_code == 0
     assert "policy=mcts" in captured.out
     assert "episodes=1" in captured.out
+
+
+def test_cli_can_run_mcts_training_smoke(capsys):
+    exit_code = main([
+        "--policy",
+        "mcts-train",
+        "--episodes",
+        "2",
+        "--max-plies",
+        "2",
+        "--mcts-iterations",
+        "2",
+        "--rollout-depth",
+        "1",
+        "--seed",
+        "99",
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "policy=mcts-train" in captured.out
+    assert "loss_curve=" in captured.out
+    assert "policy_entries=" in captured.out

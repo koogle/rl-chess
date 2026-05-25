@@ -13,13 +13,41 @@ image = (
 
 @app.function(image=image, timeout=60 * 60)
 def train_remote(
+    policy: str = "tabular",
     episodes: int = 100,
     max_plies: int = 200,
     learning_rate: float = 0.1,
     epsilon: float = 0.1,
+    mcts_iterations: int = 50,
+    rollout_depth: int = 20,
     seed: int | None = None,
 ) -> dict[str, object]:
-    """Run the exact same hand-written training loop on Modal."""
+    """Run the exact same hand-written training loops on Modal."""
+
+    if policy == "mcts-train":
+        from rl_chess.agents import TabularPolicyDistiller
+        from rl_chess.train import train_mcts_self_play
+
+        learner = TabularPolicyDistiller(learning_rate=learning_rate)
+        metrics = train_mcts_self_play(
+            learner=learner,
+            episodes=episodes,
+            max_plies=max_plies,
+            mcts_iterations=mcts_iterations,
+            rollout_depth=rollout_depth,
+            seed=seed,
+        )
+        return {
+            "policy": "mcts-train",
+            "episodes": metrics.episodes,
+            "total_plies": metrics.total_plies,
+            "examples_collected": metrics.examples_collected,
+            "policy_entries": metrics.policy_entries,
+            "loss_curve": metrics.loss_curve,
+        }
+
+    if policy != "tabular":
+        raise ValueError(f"unsupported remote training policy {policy!r}")
 
     from rl_chess.agents import TabularMoveValueAgent
     from rl_chess.train import train_self_play
@@ -36,6 +64,7 @@ def train_remote(
         seed=seed,
     )
     return {
+        "policy": "tabular",
         "episodes": metrics.episodes,
         "total_plies": metrics.total_plies,
         "replay_size": metrics.replay_size,
@@ -46,19 +75,25 @@ def train_remote(
 
 @app.local_entrypoint()
 def main(
+    policy: str = "tabular",
     episodes: int = 100,
     max_plies: int = 200,
     learning_rate: float = 0.1,
     epsilon: float = 0.1,
+    mcts_iterations: int = 50,
+    rollout_depth: int = 20,
     seed: int | None = None,
 ) -> None:
     """CLI entrypoint: modal run src/rl_chess/modal_app.py --episodes 1000"""
 
     summary = train_remote.remote(
+        policy=policy,
         episodes=episodes,
         max_plies=max_plies,
         learning_rate=learning_rate,
         epsilon=epsilon,
+        mcts_iterations=mcts_iterations,
+        rollout_depth=rollout_depth,
         seed=seed,
     )
     print(summary)

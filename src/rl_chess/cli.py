@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import argparse
 
-from rl_chess.agents import TabularMoveValueAgent
+from rl_chess.agents import TabularMoveValueAgent, TabularPolicyDistiller
 from rl_chess.mcts import MCTS, RandomRolloutEvaluator
 from rl_chess.self_play import play_episode
-from rl_chess.train import train_self_play
+from rl_chess.train import train_mcts_self_play, train_self_play
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run a tiny chess RL self-play training loop.")
-    parser.add_argument("--policy", choices=["tabular", "mcts"], default="tabular", help="Policy loop to run.")
+    parser.add_argument("--policy", choices=["tabular", "mcts", "mcts-train"], default="tabular", help="Policy loop to run.")
     parser.add_argument("--episodes", type=int, default=10, help="Number of self-play games.")
     parser.add_argument("--max-plies", type=int, default=200, help="Maximum plies per game.")
     parser.add_argument("--learning-rate", type=float, default=0.1, help="Tabular update rate.")
@@ -23,6 +23,30 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.policy == "mcts-train":
+        learner = TabularPolicyDistiller(learning_rate=args.learning_rate)
+        metrics = train_mcts_self_play(
+            learner=learner,
+            episodes=args.episodes,
+            max_plies=args.max_plies,
+            mcts_iterations=args.mcts_iterations,
+            rollout_depth=args.rollout_depth,
+            seed=args.seed,
+        )
+        print(
+            " ".join(
+                [
+                    "policy=mcts-train",
+                    f"episodes={metrics.episodes}",
+                    f"total_plies={metrics.total_plies}",
+                    f"examples_collected={metrics.examples_collected}",
+                    f"policy_entries={metrics.policy_entries}",
+                    "loss_curve=" + ",".join(f"{loss:.6f}" for loss in metrics.loss_curve),
+                ]
+            )
+        )
+        return 0
+
     if args.policy == "mcts":
         policy = MCTS(
             iterations=args.mcts_iterations,

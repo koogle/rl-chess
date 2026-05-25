@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from rl_chess.agents import TabularMoveValueAgent
+from rl_chess.agents import TabularMoveValueAgent, TabularPolicyDistiller
 from rl_chess.env import ChessEnv
+from rl_chess.mcts import MCTS, RandomRolloutEvaluator
 from rl_chess.replay import ReplayBuffer
+from rl_chess.search_self_play import collect_search_episode
 from rl_chess.self_play import play_episode
 
 
@@ -14,6 +16,15 @@ class TrainMetrics:
     total_plies: int
     replay_size: int
     results: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class MCTSTrainMetrics:
+    episodes: int
+    total_plies: int
+    examples_collected: int
+    policy_entries: int
+    loss_curve: list[float] = field(default_factory=list)
 
 
 def train_self_play(
@@ -58,4 +69,48 @@ def train_self_play(
         total_plies=total_plies,
         replay_size=len(replay),
         results=results,
+    )
+
+
+def train_mcts_self_play(
+    learner: TabularPolicyDistiller,
+    episodes: int,
+    max_plies: int = 200,
+    mcts_iterations: int = 50,
+    rollout_depth: int = 20,
+    seed: int | None = None,
+) -> MCTSTrainMetrics:
+    """First AlphaGo-style loop: MCTS self-play then tabular distillation."""
+
+    if episodes <= 0:
+        raise ValueError("episodes must be positive")
+
+    total_plies = 0
+    examples_collected = 0
+    loss_curve: list[float] = []
+
+    for episode_idx in range(episodes):
+        episode_seed = None if seed is None else seed + episode_idx
+        mcts = MCTS(
+            iterations=mcts_iterations,
+            evaluator=RandomRolloutEvaluator(max_depth=rollout_depth),
+            seed=episode_seed,
+        )
+        examples = collect_search_episode(
+            env=ChessEnv(),
+            mcts=mcts,
+            max_plies=max_plies,
+            seed=episode_seed,
+        )
+        loss = learner.learn(examples)
+        loss_curve.append(loss)
+        total_plies += len(examples)
+        examples_collected += len(examples)
+
+    return MCTSTrainMetrics(
+        episodes=episodes,
+        total_plies=total_plies,
+        examples_collected=examples_collected,
+        policy_entries=learner.policy_entries,
+        loss_curve=loss_curve,
     )

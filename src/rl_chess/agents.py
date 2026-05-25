@@ -7,7 +7,7 @@ from typing import Protocol
 import chess
 
 from rl_chess.env import board_to_ascii
-from rl_chess.replay import Transition
+from rl_chess.replay import SearchTrainingExample, Transition
 
 
 class Policy(Protocol):
@@ -65,3 +65,49 @@ class TabularMoveValueAgent:
             key = (transition.state_ascii, transition.action_uci)
             old_value = self.q.get(key, 0.0)
             self.q[key] = old_value + self.learning_rate * (transition.return_ - old_value)
+
+
+@dataclass
+class TabularPolicyDistiller:
+    """Tiny policy/value learner that distills MCTS targets into tables."""
+
+    learning_rate: float = 0.1
+
+    def __post_init__(self) -> None:
+        if not 0.0 < self.learning_rate <= 1.0:
+            raise ValueError("learning_rate must be in (0, 1]")
+        self.policy: dict[tuple[str, str], float] = {}
+        self.values: dict[str, float] = {}
+
+    def policy_probability(self, state_ascii: str, action_uci: str) -> float:
+        return self.policy.get((state_ascii, action_uci), 0.0)
+
+    def value(self, state_ascii: str) -> float:
+        return self.values.get(state_ascii, 0.0)
+
+    @property
+    def policy_entries(self) -> int:
+        return len(self.policy)
+
+    def learn(self, examples: list[SearchTrainingExample]) -> float:
+        if not examples:
+            return 0.0
+
+        total_loss = 0.0
+        target_count = 0
+        for example in examples:
+            for action_uci in example.legal_moves:
+                target = example.policy_target.get(action_uci, 0.0)
+                key = (example.state_ascii, action_uci)
+                old = self.policy.get(key, 0.0)
+                total_loss += (target - old) ** 2
+                target_count += 1
+                self.policy[key] = old + self.learning_rate * (target - old)
+
+            if example.value_target is not None:
+                old_value = self.values.get(example.state_ascii, 0.0)
+                total_loss += (example.value_target - old_value) ** 2
+                target_count += 1
+                self.values[example.state_ascii] = old_value + self.learning_rate * (example.value_target - old_value)
+
+        return total_loss / max(target_count, 1)

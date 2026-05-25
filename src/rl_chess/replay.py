@@ -21,6 +21,16 @@ class Transition:
         return replace(self, return_=value)
 
 
+@dataclass(frozen=True)
+class SearchTrainingExample:
+    """One AlphaGo-style training target created by MCTS self-play."""
+
+    state_ascii: str
+    legal_moves: tuple[str, ...]
+    policy_target: dict[str, float]
+    value_target: float | None = None
+
+
 class ReplayBuffer:
     def __init__(self, capacity: int) -> None:
         if capacity <= 0:

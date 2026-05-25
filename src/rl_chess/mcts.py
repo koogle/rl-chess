@@ -138,6 +138,21 @@ class MCTS:
     def select_move(self, board: chess.Board, rng: random.Random | None = None) -> chess.Move:
         return self.search(board, rng=rng)
 
+    def search_policy(self, board: chess.Board, rng: random.Random | None = None) -> dict[str, float]:
+        """Run search and return normalized root visit counts by UCI move."""
+
+        self.search(board, rng=rng)
+        if self.last_root is None or not self.last_root.children:
+            raise ValueError("search produced no root statistics")
+        total_visits = sum(child.visits for child in self.last_root.children)
+        if total_visits <= 0:
+            raise ValueError("search produced zero child visits")
+        return {
+            child.move.uci(): child.visits / total_visits
+            for child in self.last_root.children
+            if child.move is not None and child.visits > 0
+        }
+
     def search(self, board: chess.Board, rng: random.Random | None = None) -> chess.Move:
         if board.is_game_over(claim_draw=True):
             raise ValueError("cannot search from a terminal board")
