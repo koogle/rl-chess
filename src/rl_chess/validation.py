@@ -15,13 +15,11 @@ def _option_bound(option: object, name: str) -> int | None:
     return None if value is None else int(value)
 
 
-def stockfish_strength_config(elo: int, options: dict[str, object]) -> dict[str, int | bool]:
-    """Return the weakest honest Stockfish config for a requested validation Elo.
+STOCKFISH_ELO_FLOOR = 1320
 
-    Stockfish's `UCI_Elo` floor is commonly higher than 500. For those engines,
-    an Elo-500 baseline maps to the weakest available `Skill Level` instead of
-    pretending the engine accepted an unsupported UCI_Elo value.
-    """
+
+def stockfish_strength_config(elo: int, options: dict[str, object]) -> dict[str, int | bool]:
+    """Return an honest Stockfish strength config for a requested validation Elo."""
 
     if elo <= 0:
         raise ValueError("elo must be positive")
@@ -37,10 +35,10 @@ def stockfish_strength_config(elo: int, options: dict[str, object]) -> dict[str,
     if skill is not None:
         min_skill = _option_bound(skill, "min") or 0
         max_skill = _option_bound(skill, "max") or 20
-        if elo <= 500:
+        if elo <= STOCKFISH_ELO_FLOOR:
             level = min_skill
         else:
-            level = round(min_skill + (max_skill - min_skill) * min((elo - 500) / 1000, 1.0))
+            level = round(min_skill + (max_skill - min_skill) * min((elo - STOCKFISH_ELO_FLOOR) / 1000, 1.0))
         return {"Skill Level": level}
 
     raise ValueError("stockfish engine does not expose UCI_Elo or Skill Level strength controls")
@@ -115,7 +113,7 @@ class StockfishPlayer:
     """UCI Stockfish player configured as a weak fixed-Elo validation baseline."""
 
     path: str = "stockfish"
-    elo: int = 500
+    elo: int = STOCKFISH_ELO_FLOOR
     movetime: float = 0.05
 
     def __post_init__(self) -> None:
@@ -192,7 +190,7 @@ def play_validation_match(
 
 def validate_model_against_stockfish(
     model: PolicyValueNet,
-    elo: int = 500,
+    elo: int = STOCKFISH_ELO_FLOOR,
     games: int = 2,
     max_plies: int = 200,
     simulations: int = 64,

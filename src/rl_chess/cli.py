@@ -4,7 +4,7 @@ import argparse
 
 from rl_chess.nn_model import PolicyValueNet
 from rl_chess.train import train
-from rl_chess.validation import validate_model_against_stockfish
+from rl_chess.validation import STOCKFISH_ELO_FLOOR, validate_model_against_stockfish
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -20,7 +20,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hidden-channels", type=int, default=32)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--validate-stockfish", action="store_true", help="After training, play the model against a weak Stockfish baseline.")
-    parser.add_argument("--stockfish-elo", type=int, default=500, help="Stockfish UCI_Elo baseline for validation.")
+    parser.add_argument(
+        "--stockfish-elo",
+        type=int,
+        default=STOCKFISH_ELO_FLOOR,
+        help="Stockfish UCI_Elo baseline for validation; defaults to the supported floor.",
+    )
     parser.add_argument("--stockfish-path", default="stockfish", help="Path to the Stockfish executable.")
     parser.add_argument("--stockfish-movetime", type=float, default=0.05, help="Seconds per Stockfish move.")
     parser.add_argument("--validation-games", type=int, default=2, help="Validation games, alternating colors.")

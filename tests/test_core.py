@@ -124,20 +124,20 @@ def test_sample_policy_rejects_negative_temperature():
         sample_policy({"e2e4": 1.0}, temperature=-0.1, rng=__import__("random").Random(1))
 
 
-def test_stockfish_elo_500_uses_weakest_skill_when_uci_elo_floor_is_higher():
+def test_stockfish_supported_elo_floor_uses_uci_limit_strength():
     class Option:
         def __init__(self, min_value, max_value):
             self.min = min_value
             self.max = max_value
 
     assert stockfish_strength_config(
-        500,
+        1320,
         {
             "UCI_LimitStrength": Option(None, None),
             "UCI_Elo": Option(1320, 3190),
             "Skill Level": Option(0, 20),
         },
-    ) == {"Skill Level": 0}
+    ) == {"UCI_LimitStrength": True, "UCI_Elo": 1320}
 
 
 def test_validation_game_scores_candidate_result_from_candidate_perspective():
@@ -170,7 +170,7 @@ def test_cli_can_run_stockfish_validation_with_injected_runner(monkeypatch, caps
     from rl_chess import cli
 
     def fake_validate_model_against_stockfish(**kwargs):
-        assert kwargs["elo"] == 500
+        assert kwargs["elo"] == 1320
         assert kwargs["games"] == 1
         return ValidationResult(wins=1)
 
@@ -192,7 +192,7 @@ def test_cli_can_run_stockfish_validation_with_injected_runner(monkeypatch, caps
     ])
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert "stockfish_elo=500" in captured.out
+    assert "stockfish_elo=1320" in captured.out
     assert "validation_passed=True" in captured.out
 
 

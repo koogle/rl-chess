@@ -21,7 +21,7 @@ The AlphaGo lesson for this project is concise:
 
 We keep the board inspectable with Unicode chess diagrams instead of exposing FEN to the RL loop. The next milestone is MCTS self-play training: run search at each board, store the visit-count policy as a better per-move target, then train a small policy/value learner from those examples. Local training remains the source of truth; Modal only scales the same loop remotely.
 
-See `docs/plans/2026-05-25-rl-mcts-self-play-modal.md` for the implementation plan.
+See `docs/alphago-from-scratch-lessons.md` for the Dwarkesh/Eric Jang AlphaGo-from-scratch notes, and `docs/plans/2026-05-25-rl-mcts-self-play-modal.md` for the implementation plan.
 
 ## Local training
 
