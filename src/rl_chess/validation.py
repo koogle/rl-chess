@@ -6,7 +6,7 @@ from typing import Protocol
 import chess
 import chess.engine
 
-from rl_chess.nn_model import NeuralPolicyValueEvaluator, PolicyValueNet
+from rl_chess.nn_model import PolicyValueNet
 from rl_chess.puct_mcts import PUCTMCTS
 
 
@@ -102,7 +102,7 @@ class PUCTModelPlayer:
 
     def select_move(self, board: chess.Board) -> chess.Move:
         return PUCTMCTS(
-            evaluator=NeuralPolicyValueEvaluator(self.model),
+            evaluator=self.model,
             iterations=self.simulations,
             seed=self.seed,
         ).select_move(board)

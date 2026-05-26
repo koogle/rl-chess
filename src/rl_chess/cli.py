@@ -26,6 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--hidden-channels", type=int, default=32)
+    parser.add_argument("--residual-blocks", type=int, default=4)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--checkpoint-dir", type=Path, default=None, help="Directory for iteration checkpoints.")
     parser.add_argument("--load-checkpoint", type=Path, default=None, help="Start from a saved model checkpoint.")
@@ -57,6 +58,7 @@ def apply_first_run_preset(args: argparse.Namespace) -> None:
     args.learning_rate = preset.learning_rate
     args.temperature = preset.temperature
     args.hidden_channels = preset.hidden_channels
+    args.residual_blocks = preset.residual_blocks
     args.validation_games = preset.validation_games
     args.validation_max_plies = preset.validation_max_plies
     args.validate_stockfish = True
@@ -66,7 +68,11 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     apply_first_run_preset(args)
 
-    model = load_checkpoint_model(args.load_checkpoint) if args.load_checkpoint else PolicyValueNet(hidden_channels=args.hidden_channels)
+    model = (
+        load_checkpoint_model(args.load_checkpoint)
+        if args.load_checkpoint
+        else PolicyValueNet(hidden_channels=args.hidden_channels, residual_blocks=args.residual_blocks)
+    )
     metrics = train(
         model=model,
         iterations=args.iterations,

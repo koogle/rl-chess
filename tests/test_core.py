@@ -3,7 +3,7 @@ import pytest
 import torch
 
 from rl_chess.env import ChessEnv, board_to_ascii, result_to_white_reward
-from rl_chess.nn_model import PolicyValueNet, PolicyValueTrainer, encode_board_ascii
+from rl_chess.nn_model import PolicyValueNet, train_batch
 from rl_chess.puct_mcts import PUCTMCTS, PolicyValueEvaluator
 from rl_chess.self_play import TrainingExample, sample_policy
 from rl_chess.run_presets import FIRST_MEANINGFUL_RUN
@@ -39,7 +39,7 @@ def test_env_uses_unicode_board_and_python_chess_legality():
 
 def test_board_encoder_preserves_visual_state_and_side_to_move():
     board = chess.Board()
-    encoded = encode_board_ascii(board_to_ascii(board), board.turn)
+    encoded = PolicyValueNet.encode_board_ascii(board_to_ascii(board), board.turn)
     assert encoded.shape == (13, 8, 8)
     assert encoded[:12].sum().item() == 32
     assert encoded[12].sum().item() == 64
@@ -60,12 +60,28 @@ def test_policy_value_trainer_reduces_loss_on_repeated_target():
         value_target=0.5,
     )
     model = PolicyValueNet(hidden_channels=8)
-    trainer = PolicyValueTrainer(model, learning_rate=0.01)
-    first = trainer.train_batch([example]).total_loss
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+    first = train_batch(model, optimizer, [example]).total_loss
     last = first
     for _ in range(12):
-        last = trainer.train_batch([example]).total_loss
+        last = train_batch(model, optimizer, [example]).total_loss
     assert last < first
+
+
+def test_model_is_the_puct_evaluator():
+    model = PolicyValueNet(hidden_channels=8)
+    priors, white_value = model.evaluate(chess.Board())
+    assert "e2e4" in priors
+    assert abs(sum(priors.values()) - 1.0) < 1e-6
+    assert -1.0 <= white_value <= 1.0
+
+
+def test_model_uses_a_deeper_residual_tower():
+    model = PolicyValueNet(hidden_channels=8, residual_blocks=3)
+    assert model.residual_blocks == 3
+    logits, values = model(torch.zeros((2, 13, 8, 8)))
+    assert logits.shape == (2, 64 * 64 * 5)
+    assert values.shape == (2,)
 
 
 def test_self_play_can_be_uncapped_until_terminal_from_mate_in_one():
@@ -118,8 +134,30 @@ def test_first_meaningful_run_is_bigger_than_smoke_but_bounded():
     assert FIRST_MEANINGFUL_RUN.games_per_iteration >= 2
     assert FIRST_MEANINGFUL_RUN.simulations >= 32
     assert FIRST_MEANINGFUL_RUN.train_steps >= 4
+    assert FIRST_MEANINGFUL_RUN.hidden_channels >= 64
+    assert FIRST_MEANINGFUL_RUN.residual_blocks >= 4
     assert FIRST_MEANINGFUL_RUN.validation_games >= 4
     assert FIRST_MEANINGFUL_RUN.max_plies <= 160
+
+
+def test_modal_remote_training_entrypoint_can_run_tiny_local_smoke():
+    from rl_chess.modal_app import train_remote
+
+    summary = train_remote.local(
+        iterations=1,
+        games_per_iteration=1,
+        max_plies=1,
+        simulations=1,
+        train_steps=1,
+        batch_size=1,
+        hidden_channels=8,
+        residual_blocks=0,
+        seed=1,
+    )
+    assert summary["loop"] == "nn-puct"
+    assert summary["games"] == 1
+    assert summary["hidden_channels"] == 8
+    assert summary["residual_blocks"] == 0
 
 
 def test_training_rejects_invalid_public_knobs():
@@ -244,7 +282,11 @@ def test_cli_first_meaningful_run_applies_preset_and_checkpoint_dir(monkeypatch,
             checkpoint_paths=[tmp_path / "iteration-0001.pt"],
         )
 
+    def fake_validate_model_against_stockfish(**_kwargs):
+        return ValidationResult(draws=1)
+
     monkeypatch.setattr(cli, "train", fake_train)
+    monkeypatch.setattr(cli, "validate_model_against_stockfish", fake_validate_model_against_stockfish)
     exit_code = cli.main(["--first-meaningful-run", "--checkpoint-dir", str(tmp_path), "--seed", "7"])
 
     captured = capsys.readouterr()

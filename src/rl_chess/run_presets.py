@@ -15,6 +15,7 @@ class TrainingRunConfig:
     learning_rate: float
     temperature: float
     hidden_channels: int
+    residual_blocks: int
     validation_games: int
     validation_max_plies: int
 
@@ -29,7 +30,8 @@ FIRST_MEANINGFUL_RUN = TrainingRunConfig(
     replay_capacity=5_000,
     learning_rate=1e-3,
     temperature=1.0,
-    hidden_channels=32,
+    hidden_channels=64,
+    residual_blocks=4,
     validation_games=4,
     validation_max_plies=160,
 )

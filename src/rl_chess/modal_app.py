@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 import modal
 
 app = modal.App("rl-chess-training")
+checkpoint_volume = modal.Volume.from_name("rl-chess-checkpoints", create_if_missing=True)
+CHECKPOINT_ROOT = Path("/checkpoints")
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -12,42 +17,8 @@ image = (
 )
 
 
-@app.function(image=image, timeout=60 * 60)
-def train_remote(
-    iterations: int = 10,
-    games_per_iteration: int = 1,
-    max_plies: int | None = 200,
-    simulations: int = 64,
-    train_steps: int = 1,
-    batch_size: int = 64,
-    learning_rate: float = 1e-3,
-    temperature: float = 1.0,
-    hidden_channels: int = 32,
-    validate_stockfish: bool = False,
-    stockfish_elo: int = 1320,
-    validation_games: int = 2,
-    validation_max_plies: int = 200,
-    stockfish_movetime: float = 0.05,
-    seed: int | None = None,
-) -> dict[str, object]:
-    from rl_chess.nn_model import PolicyValueNet
-    from rl_chess.train import train
-    from rl_chess.validation import validate_model_against_stockfish
-
-    model = PolicyValueNet(hidden_channels=hidden_channels)
-    metrics = train(
-        model=model,
-        iterations=iterations,
-        games_per_iteration=games_per_iteration,
-        simulations=simulations,
-        max_plies=max_plies,
-        train_steps=train_steps,
-        batch_size=batch_size,
-        learning_rate=learning_rate,
-        temperature=temperature,
-        seed=seed,
-    )
-    summary: dict[str, object] = {
+def _jsonable_metrics(metrics: Any) -> dict[str, object]:
+    return {
         "loop": "nn-puct",
         "iterations": metrics.iterations,
         "games": metrics.games,
@@ -58,7 +29,80 @@ def train_remote(
         "loss_curve": metrics.loss_curve,
         "policy_loss_curve": metrics.policy_loss_curve,
         "value_loss_curve": metrics.value_loss_curve,
+        "checkpoint_paths": [str(path) for path in metrics.checkpoint_paths],
     }
+
+
+@app.function(image=image, timeout=60 * 60, volumes={str(CHECKPOINT_ROOT): checkpoint_volume})
+def train_remote(
+    iterations: int = 10,
+    games_per_iteration: int = 1,
+    max_plies: int | None = 200,
+    simulations: int = 64,
+    train_steps: int = 1,
+    batch_size: int = 64,
+    replay_capacity: int = 10_000,
+    learning_rate: float = 1e-3,
+    temperature: float = 1.0,
+    hidden_channels: int = 64,
+    residual_blocks: int = 4,
+    checkpoint_dir: str | None = None,
+    first_meaningful_run: bool = False,
+    validate_stockfish: bool = False,
+    stockfish_elo: int = 1320,
+    validation_games: int = 2,
+    validation_max_plies: int = 200,
+    stockfish_movetime: float = 0.05,
+    seed: int | None = None,
+) -> dict[str, object]:
+    from rl_chess.nn_model import PolicyValueNet
+    from rl_chess.run_presets import FIRST_MEANINGFUL_RUN
+    from rl_chess.train import train
+    from rl_chess.validation import validate_model_against_stockfish
+
+    if first_meaningful_run:
+        preset = FIRST_MEANINGFUL_RUN
+        iterations = preset.iterations
+        games_per_iteration = preset.games_per_iteration
+        max_plies = preset.max_plies
+        simulations = preset.simulations
+        train_steps = preset.train_steps
+        batch_size = preset.batch_size
+        replay_capacity = preset.replay_capacity
+        learning_rate = preset.learning_rate
+        temperature = preset.temperature
+        hidden_channels = preset.hidden_channels
+        residual_blocks = preset.residual_blocks
+        validation_games = preset.validation_games
+        validation_max_plies = preset.validation_max_plies
+        validate_stockfish = True
+        checkpoint_dir = checkpoint_dir or str(CHECKPOINT_ROOT / "first-meaningful-run")
+
+    model = PolicyValueNet(hidden_channels=hidden_channels, residual_blocks=residual_blocks)
+    metrics = train(
+        model=model,
+        iterations=iterations,
+        games_per_iteration=games_per_iteration,
+        simulations=simulations,
+        max_plies=max_plies,
+        train_steps=train_steps,
+        batch_size=batch_size,
+        replay_capacity=replay_capacity,
+        learning_rate=learning_rate,
+        temperature=temperature,
+        seed=seed,
+        checkpoint_dir=checkpoint_dir,
+    )
+    summary = _jsonable_metrics(metrics)
+    summary.update(
+        {
+            "hidden_channels": hidden_channels,
+            "residual_blocks": residual_blocks,
+            "checkpoint_dir": checkpoint_dir,
+        }
+    )
+    if checkpoint_dir is not None:
+        checkpoint_volume.commit()
     if validate_stockfish:
         validation = validate_model_against_stockfish(
             model=model,
@@ -91,9 +135,13 @@ def main(
     simulations: int = 64,
     train_steps: int = 1,
     batch_size: int = 64,
+    replay_capacity: int = 10_000,
     learning_rate: float = 1e-3,
     temperature: float = 1.0,
-    hidden_channels: int = 32,
+    hidden_channels: int = 64,
+    residual_blocks: int = 4,
+    checkpoint_dir: str | None = None,
+    first_meaningful_run: bool = False,
     validate_stockfish: bool = False,
     stockfish_elo: int = 1320,
     validation_games: int = 2,
@@ -109,9 +157,13 @@ def main(
             simulations=simulations,
             train_steps=train_steps,
             batch_size=batch_size,
+            replay_capacity=replay_capacity,
             learning_rate=learning_rate,
             temperature=temperature,
             hidden_channels=hidden_channels,
+            residual_blocks=residual_blocks,
+            checkpoint_dir=checkpoint_dir,
+            first_meaningful_run=first_meaningful_run,
             validate_stockfish=validate_stockfish,
             stockfish_elo=stockfish_elo,
             validation_games=validation_games,

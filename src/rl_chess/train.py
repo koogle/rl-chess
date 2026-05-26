@@ -7,7 +7,7 @@ from typing import Any
 
 import torch
 
-from rl_chess.nn_model import NeuralPolicyValueEvaluator, PolicyValueNet, PolicyValueTrainer
+from rl_chess.nn_model import PolicyValueNet, train_batch
 from rl_chess.self_play import TrainingExample, play_self_game
 
 
@@ -31,6 +31,7 @@ def save_checkpoint(model: PolicyValueNet, path: str | Path, metrics: TrainMetri
     torch.save(
         {
             "hidden_channels": model.hidden_channels,
+            "residual_blocks": model.residual_blocks,
             "model_state_dict": model.state_dict(),
             "metrics": None if metrics is None else checkpoint_metrics(metrics),
         },
@@ -56,7 +57,10 @@ def checkpoint_metrics(metrics: TrainMetrics) -> dict[str, object]:
 
 def load_checkpoint_model(path: str | Path) -> PolicyValueNet:
     checkpoint: dict[str, Any] = torch.load(Path(path), map_location="cpu", weights_only=True)
-    model = PolicyValueNet(hidden_channels=int(checkpoint["hidden_channels"]))
+    model = PolicyValueNet(
+        hidden_channels=int(checkpoint["hidden_channels"]),
+        residual_blocks=int(checkpoint.get("residual_blocks", 0)),
+    )
     model.load_state_dict(checkpoint["model_state_dict"])
     return model
 
@@ -97,7 +101,7 @@ def train(
     if seed is not None:
         torch.manual_seed(seed)
     rng = random.Random(seed)
-    trainer = PolicyValueTrainer(model, learning_rate=learning_rate)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     replay: list[TrainingExample] = []
     losses: list[float] = []
     policy_losses: list[float] = []
@@ -111,7 +115,7 @@ def train(
         for game_idx in range(games_per_iteration):
             game_seed = None if seed is None else seed + iteration * games_per_iteration + game_idx
             game = play_self_game(
-                NeuralPolicyValueEvaluator(model),
+                model,
                 simulations=simulations,
                 max_plies=max_plies,
                 temperature=temperature,
@@ -127,7 +131,7 @@ def train(
             if not replay:
                 continue
             batch = rng.sample(replay, k=min(batch_size, len(replay)))
-            stats = trainer.train_batch(batch)
+            stats = train_batch(model, optimizer, batch)
             losses.append(stats.total_loss)
             policy_losses.append(stats.policy_loss)
             value_losses.append(stats.value_loss)
