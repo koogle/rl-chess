@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import itertools
 
 import chess
 
@@ -14,12 +15,12 @@ from rl_chess.replay import Transition
 def collect_search_episode(
     env: ChessEnv,
     mcts: MCTS,
-    max_plies: int = 200,
+    max_plies: int | None = 200,
     seed: int | None = None,
 ) -> list[SearchTrainingExample]:
     """Collect one MCTS-guided self-play game as policy/value examples."""
 
-    if max_plies <= 0:
+    if max_plies is not None and max_plies <= 0:
         raise ValueError("max_plies must be positive")
 
     rng = random.Random(seed)
@@ -28,7 +29,8 @@ def collect_search_episode(
     transitions: list[Transition] = []
     final_reward = 0.0
 
-    for _ply in range(max_plies):
+    ply_iter = itertools.count() if max_plies is None else range(max_plies)
+    for _ply in ply_iter:
         board_before = env.board.copy(stack=False)
         if board_before.is_game_over(claim_draw=True):
             break
@@ -42,6 +44,7 @@ def collect_search_episode(
         examples.append(
             SearchTrainingExample(
                 state_ascii=obs.board_ascii,
+                turn=obs.turn,
                 legal_moves=obs.legal_moves,
                 policy_target=policy_target,
                 value_target=None,
@@ -70,6 +73,7 @@ def collect_search_episode(
     return [
         SearchTrainingExample(
             state_ascii=example.state_ascii,
+            turn=example.turn,
             legal_moves=example.legal_moves,
             policy_target=example.policy_target,
             value_target=transition.return_,

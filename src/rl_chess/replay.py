@@ -29,6 +29,7 @@ class SearchTrainingExample:
     legal_moves: tuple[str, ...]
     policy_target: dict[str, float]
     value_target: float | None = None
+    turn: bool = True
 
 
 class ReplayBuffer:

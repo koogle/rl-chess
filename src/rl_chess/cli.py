@@ -4,13 +4,14 @@ import argparse
 
 from rl_chess.agents import TabularMoveValueAgent, TabularPolicyDistiller
 from rl_chess.mcts import MCTS, RandomRolloutEvaluator
+from rl_chess.nn_model import ChessPolicyValueNet
 from rl_chess.self_play import play_episode
-from rl_chess.train import train_mcts_self_play, train_self_play
+from rl_chess.train import train_mcts_self_play, train_neural_mcts_self_play, train_self_play
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run a tiny chess RL self-play training loop.")
-    parser.add_argument("--policy", choices=["tabular", "mcts", "mcts-train"], default="tabular", help="Policy loop to run.")
+    parser.add_argument("--policy", choices=["tabular", "mcts", "mcts-train", "nn-train"], default="tabular", help="Policy loop to run.")
     parser.add_argument("--episodes", type=int, default=10, help="Number of self-play games.")
     parser.add_argument("--max-plies", type=int, default=200, help="Maximum plies per game.")
     parser.add_argument("--learning-rate", type=float, default=0.1, help="Tabular update rate.")
@@ -18,11 +19,38 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mcts-iterations", type=int, default=100, help="MCTS simulations per move.")
     parser.add_argument("--rollout-depth", type=int, default=80, help="Random rollout depth for MCTS leaf evaluation.")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducible runs.")
+    parser.add_argument("--hidden-channels", type=int, default=32, help="Hidden channels for the neural policy/value net.")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.policy == "nn-train":
+        model = ChessPolicyValueNet(hidden_channels=args.hidden_channels)
+        metrics = train_neural_mcts_self_play(
+            model=model,
+            episodes=args.episodes,
+            max_plies=args.max_plies,
+            mcts_iterations=args.mcts_iterations,
+            rollout_depth=args.rollout_depth,
+            learning_rate=args.learning_rate,
+            seed=args.seed,
+        )
+        print(
+            " ".join(
+                [
+                    "policy=nn-train",
+                    f"episodes={metrics.episodes}",
+                    f"total_plies={metrics.total_plies}",
+                    f"examples_collected={metrics.examples_collected}",
+                    "loss_curve=" + ",".join(f"{loss:.6f}" for loss in metrics.loss_curve),
+                    "policy_loss_curve=" + ",".join(f"{loss:.6f}" for loss in metrics.policy_loss_curve),
+                    "value_loss_curve=" + ",".join(f"{loss:.6f}" for loss in metrics.value_loss_curve),
+                ]
+            )
+        )
+        return 0
+
     if args.policy == "mcts-train":
         learner = TabularPolicyDistiller(learning_rate=args.learning_rate)
         metrics = train_mcts_self_play(

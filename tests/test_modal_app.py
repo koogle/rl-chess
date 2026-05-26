@@ -24,3 +24,23 @@ def test_modal_training_function_can_run_mcts_training_locally():
     assert summary["episodes"] == 2
     assert summary["examples_collected"] == 4
     assert len(summary["loss_curve"]) == 2
+
+
+def test_modal_training_function_can_run_neural_mcts_training_locally():
+    summary = train_remote.local(
+        policy="nn-train",
+        episodes=2,
+        max_plies=2,
+        mcts_iterations=2,
+        rollout_depth=1,
+        learning_rate=0.001,
+        seed=11,
+        hidden_channels=8,
+    )
+
+    assert summary["policy"] == "nn-train"
+    assert summary["episodes"] == 2
+    assert summary["examples_collected"] == 4
+    assert len(summary["loss_curve"]) == 2
+    assert len(summary["policy_loss_curve"]) == 2
+    assert len(summary["value_loss_curve"]) == 2

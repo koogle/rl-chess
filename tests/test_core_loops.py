@@ -14,6 +14,14 @@ class FirstLegalPolicy:
         return next(iter(board.legal_moves))
 
 
+class ScriptedPolicy:
+    def __init__(self, moves):
+        self.moves = list(moves)
+
+    def select_move(self, board, rng=None):
+        return chess.Move.from_uci(self.moves.pop(0))
+
+
 def test_env_step_applies_legal_move_and_rejects_illegal_move():
     env = ChessEnv()
     obs = env.reset()
@@ -107,6 +115,24 @@ def test_play_episode_records_every_ply_with_actor_returns():
     assert isinstance(first.action_uci, str)
     assert first.player == chess.WHITE
     assert all(t.return_ is None for t in episode.transitions)
+
+
+def test_play_episode_can_run_until_terminal_without_turn_cap():
+    env = ChessEnv()
+
+    episode = play_episode(
+        env=env,
+        white_policy=ScriptedPolicy(["f2f3", "g2g4"]),
+        black_policy=ScriptedPolicy(["e7e5", "d8h4"]),
+        max_plies=None,
+        assign_returns=True,
+    )
+
+    assert len(episode.transitions) == 4
+    assert episode.result == "0-1"
+    assert episode.winner_reward == -1.0
+    assert episode.transitions[0].return_ == -1.0
+    assert episode.transitions[1].return_ == 1.0
 
 
 def test_replay_buffer_is_bounded_and_samples_deterministically():
@@ -208,3 +234,29 @@ def test_cli_can_run_mcts_training_smoke(capsys):
     assert "policy=mcts-train" in captured.out
     assert "loss_curve=" in captured.out
     assert "policy_entries=" in captured.out
+
+
+def test_cli_can_run_neural_mcts_training_smoke(capsys):
+    exit_code = main([
+        "--policy",
+        "nn-train",
+        "--episodes",
+        "2",
+        "--max-plies",
+        "2",
+        "--mcts-iterations",
+        "2",
+        "--rollout-depth",
+        "1",
+        "--learning-rate",
+        "0.001",
+        "--seed",
+        "99",
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "policy=nn-train" in captured.out
+    assert "loss_curve=" in captured.out
+    assert "policy_loss_curve=" in captured.out
+    assert "value_loss_curve=" in captured.out

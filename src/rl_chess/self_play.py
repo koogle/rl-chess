@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import itertools
 import random
 
 import chess
@@ -21,13 +22,13 @@ def play_episode(
     env: ChessEnv,
     white_policy: Policy,
     black_policy: Policy,
-    max_plies: int = 200,
+    max_plies: int | None = 200,
     seed: int | None = None,
     assign_returns: bool = False,
 ) -> Episode:
-    """Run one self-play game by alternating policies until terminal/max plies."""
+    """Run one self-play game by alternating policies until terminal or optional cap."""
 
-    if max_plies <= 0:
+    if max_plies is not None and max_plies <= 0:
         raise ValueError("max_plies must be positive")
 
     rng = random.Random(seed)
@@ -36,7 +37,8 @@ def play_episode(
     final_reward = 0.0
     result = "*"
 
-    for _ply in range(max_plies):
+    ply_iter = itertools.count() if max_plies is None else range(max_plies)
+    for _ply in ply_iter:
         board_before = env.board.copy(stack=False)
         player = board_before.turn
         policy = white_policy if player == chess.WHITE else black_policy

@@ -8,6 +8,7 @@ dependencies = [
     "modal>=1.4.3",
     "numpy>=2.4.6",
     "python-chess>=1.999",
+    "torch>=2.12.0",
 ]
 
 [project.scripts]
