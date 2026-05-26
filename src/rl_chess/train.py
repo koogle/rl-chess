@@ -1,194 +1,104 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import random
 
 import torch
 
-from rl_chess.agents import TabularMoveValueAgent, TabularPolicyDistiller
-from rl_chess.env import ChessEnv
-from rl_chess.mcts import MCTS, RandomRolloutEvaluator
-from rl_chess.nn_model import ChessPolicyValueNet, NeuralPolicyValueEvaluator, NeuralPolicyValueTrainer
-from rl_chess.puct_mcts import PUCTMCTS
-from rl_chess.replay import ReplayBuffer
-from rl_chess.search_self_play import collect_search_episode
-from rl_chess.self_play import play_episode
+from rl_chess.nn_model import NeuralPolicyValueEvaluator, PolicyValueNet, PolicyValueTrainer
+from rl_chess.self_play import TrainingExample, play_self_game
 
 
 @dataclass(frozen=True)
 class TrainMetrics:
-    episodes: int
-    total_plies: int
+    iterations: int
+    games: int
+    examples: int
+    terminal_games: int
+    truncated_games: int
     replay_size: int
-    results: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class MCTSTrainMetrics:
-    episodes: int
-    total_plies: int
-    examples_collected: int
-    policy_entries: int
-    loss_curve: list[float] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class NeuralMCTSTrainMetrics:
-    episodes: int
-    total_plies: int
-    examples_collected: int
     loss_curve: list[float] = field(default_factory=list)
     policy_loss_curve: list[float] = field(default_factory=list)
     value_loss_curve: list[float] = field(default_factory=list)
-    search_kind: str = "puct"
 
 
-def train_self_play(
-    agent: TabularMoveValueAgent,
-    episodes: int,
+def train(
+    model: PolicyValueNet,
+    iterations: int,
+    games_per_iteration: int = 1,
+    simulations: int = 64,
     max_plies: int | None = 200,
+    train_steps: int = 1,
+    batch_size: int = 64,
     replay_capacity: int = 10_000,
+    learning_rate: float = 1e-3,
+    temperature: float = 1.0,
     seed: int | None = None,
 ) -> TrainMetrics:
-    """Minimal self-play training loop.
-
-    The same agent plays both sides. Each episode is converted to Monte Carlo
-    returns from the actor's perspective and used for an incremental tabular
-    update. This is intentionally simple so the loop is inspectable.
-    """
-
-    if episodes <= 0:
-        raise ValueError("episodes must be positive")
-
-    env = ChessEnv()
-    replay = ReplayBuffer(capacity=replay_capacity)
-    total_plies = 0
-    results: list[str] = []
-
-    for episode_idx in range(episodes):
-        episode_seed = None if seed is None else seed + episode_idx
-        episode = play_episode(
-            env=env,
-            white_policy=agent,
-            black_policy=agent,
-            max_plies=max_plies,
-            seed=episode_seed,
-            assign_returns=True,
-        )
-        replay.extend(episode.transitions)
-        agent.learn(episode.transitions)
-        total_plies += len(episode.transitions)
-        results.append(episode.result)
-
-    return TrainMetrics(
-        episodes=episodes,
-        total_plies=total_plies,
-        replay_size=len(replay),
-        results=results,
-    )
-
-
-def train_mcts_self_play(
-    learner: TabularPolicyDistiller,
-    episodes: int,
-    max_plies: int | None = 200,
-    mcts_iterations: int = 50,
-    rollout_depth: int = 20,
-    seed: int | None = None,
-) -> MCTSTrainMetrics:
-    """First AlphaGo-style loop: MCTS self-play then tabular distillation."""
-
-    if episodes <= 0:
-        raise ValueError("episodes must be positive")
-
-    total_plies = 0
-    examples_collected = 0
-    loss_curve: list[float] = []
-
-    for episode_idx in range(episodes):
-        episode_seed = None if seed is None else seed + episode_idx
-        mcts = MCTS(
-            iterations=mcts_iterations,
-            evaluator=RandomRolloutEvaluator(max_depth=rollout_depth),
-            seed=episode_seed,
-        )
-        examples = collect_search_episode(
-            env=ChessEnv(),
-            mcts=mcts,
-            max_plies=max_plies,
-            seed=episode_seed,
-        )
-        loss = learner.learn(examples)
-        loss_curve.append(loss)
-        total_plies += len(examples)
-        examples_collected += len(examples)
-
-    return MCTSTrainMetrics(
-        episodes=episodes,
-        total_plies=total_plies,
-        examples_collected=examples_collected,
-        policy_entries=learner.policy_entries,
-        loss_curve=loss_curve,
-    )
-
-
-def train_neural_mcts_self_play(
-    model: ChessPolicyValueNet,
-    episodes: int,
-    max_plies: int | None = 200,
-    mcts_iterations: int = 50,
-    rollout_depth: int = 20,
-    learning_rate: float = 1e-3,
-    neural_search: bool = True,
-    seed: int | None = None,
-) -> NeuralMCTSTrainMetrics:
-    """AlphaZero-style loop: NN-guided PUCT self-play then policy/value update."""
-
-    if episodes <= 0:
-        raise ValueError("episodes must be positive")
+    if iterations <= 0:
+        raise ValueError("iterations must be positive")
+    if games_per_iteration <= 0:
+        raise ValueError("games_per_iteration must be positive")
+    if simulations <= 0:
+        raise ValueError("simulations must be positive")
+    if max_plies is not None and max_plies <= 0:
+        raise ValueError("max_plies must be positive or None")
+    if train_steps <= 0:
+        raise ValueError("train_steps must be positive")
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    if replay_capacity <= 0:
+        raise ValueError("replay_capacity must be positive")
+    if learning_rate <= 0:
+        raise ValueError("learning_rate must be positive")
+    if temperature < 0:
+        raise ValueError("temperature must be non-negative")
 
     if seed is not None:
         torch.manual_seed(seed)
+    rng = random.Random(seed)
+    trainer = PolicyValueTrainer(model, learning_rate=learning_rate)
+    replay: list[TrainingExample] = []
+    losses: list[float] = []
+    policy_losses: list[float] = []
+    value_losses: list[float] = []
+    examples = 0
+    terminal_games = 0
+    truncated_games = 0
 
-    trainer = NeuralPolicyValueTrainer(model=model, learning_rate=learning_rate)
-    total_plies = 0
-    examples_collected = 0
-    loss_curve: list[float] = []
-    policy_loss_curve: list[float] = []
-    value_loss_curve: list[float] = []
-
-    for episode_idx in range(episodes):
-        episode_seed = None if seed is None else seed + episode_idx
-        if neural_search:
-            mcts = PUCTMCTS(
-                evaluator=NeuralPolicyValueEvaluator(model),
-                iterations=mcts_iterations,
-                seed=episode_seed,
+    for iteration in range(iterations):
+        for game_idx in range(games_per_iteration):
+            game_seed = None if seed is None else seed + iteration * games_per_iteration + game_idx
+            game = play_self_game(
+                NeuralPolicyValueEvaluator(model),
+                simulations=simulations,
+                max_plies=max_plies,
+                temperature=temperature,
+                seed=game_seed,
             )
-        else:
-            mcts = MCTS(
-                iterations=mcts_iterations,
-                evaluator=RandomRolloutEvaluator(max_depth=rollout_depth),
-                seed=episode_seed,
-            )
-        examples = collect_search_episode(
-            env=ChessEnv(),
-            mcts=mcts,
-            max_plies=max_plies,
-            seed=episode_seed,
-        )
-        stats = trainer.train_batch(examples)
-        loss_curve.append(stats.total_loss)
-        policy_loss_curve.append(stats.policy_loss)
-        value_loss_curve.append(stats.value_loss)
-        total_plies += len(examples)
-        examples_collected += len(examples)
+            replay.extend(game.examples)
+            del replay[:-replay_capacity]
+            examples += len(game.examples)
+            terminal_games += int(not game.stats.truncated)
+            truncated_games += int(game.stats.truncated)
 
-    return NeuralMCTSTrainMetrics(
-        episodes=episodes,
-        total_plies=total_plies,
-        examples_collected=examples_collected,
-        loss_curve=loss_curve,
-        policy_loss_curve=policy_loss_curve,
-        value_loss_curve=value_loss_curve,
-        search_kind="puct" if neural_search else "rollout-mcts",
+        for _ in range(train_steps):
+            if not replay:
+                continue
+            batch = rng.sample(replay, k=min(batch_size, len(replay)))
+            stats = trainer.train_batch(batch)
+            losses.append(stats.total_loss)
+            policy_losses.append(stats.policy_loss)
+            value_losses.append(stats.value_loss)
+
+    return TrainMetrics(
+        iterations=iterations,
+        games=iterations * games_per_iteration,
+        examples=examples,
+        terminal_games=terminal_games,
+        truncated_games=truncated_games,
+        replay_size=len(replay),
+        loss_curve=losses,
+        policy_loss_curve=policy_losses,
+        value_loss_curve=value_losses,
     )

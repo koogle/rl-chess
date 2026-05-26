@@ -1,30 +1,27 @@
-"""Learning-first reinforcement learning loops for chess."""
+"""Minimal NN-guided PUCT chess RL loop."""
 
-from rl_chess.agents import RandomPolicy, TabularMoveValueAgent
-from rl_chess.env import ChessEnv, Observation
-from rl_chess.mcts import MCTS, MCTSNode, RandomRolloutEvaluator, uct_score
-from rl_chess.replay import ReplayBuffer, Transition
-from rl_chess.self_play import Episode, play_episode
-from rl_chess.state import BoardState, encode_board_planes, legal_move_uci, state_from_board
-from rl_chess.train import TrainMetrics, train_self_play
+from rl_chess.env import ChessEnv, Observation, board_to_ascii, result_to_white_reward
+from rl_chess.nn_model import PolicyValueNet, PolicyValueTrainer
+from rl_chess.puct_mcts import PUCTMCTS
+from rl_chess.self_play import SelfPlayGame, TrainingExample, play_self_game
+from rl_chess.train import TrainMetrics, train
+from rl_chess.validation import StockfishPlayer, ValidationResult, play_validation_match, validate_model_against_stockfish
 
 __all__ = [
     "ChessEnv",
-    "Episode",
     "Observation",
-    "MCTS",
-    "MCTSNode",
-    "RandomRolloutEvaluator",
-    "BoardState",
-    "RandomPolicy",
-    "ReplayBuffer",
-    "TabularMoveValueAgent",
+    "PUCTMCTS",
+    "PolicyValueNet",
+    "PolicyValueTrainer",
+    "SelfPlayGame",
+    "StockfishPlayer",
     "TrainMetrics",
-    "Transition",
-    "encode_board_planes",
-    "legal_move_uci",
-    "play_episode",
-    "state_from_board",
-    "train_self_play",
-    "uct_score",
+    "TrainingExample",
+    "ValidationResult",
+    "board_to_ascii",
+    "play_self_game",
+    "play_validation_match",
+    "result_to_white_reward",
+    "train",
+    "validate_model_against_stockfish",
 ]

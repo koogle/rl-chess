@@ -6,74 +6,113 @@ import random
 
 import chess
 
-from rl_chess.agents import Policy
-from rl_chess.env import ChessEnv
-from rl_chess.replay import Transition
+from rl_chess.env import board_to_ascii, result_to_white_reward
+from rl_chess.puct_mcts import PUCTMCTS, PolicyValueEvaluator
 
 
 @dataclass(frozen=True)
-class Episode:
-    transitions: list[Transition]
-    result: str
-    winner_reward: float
+class TrainingExample:
+    """One AlphaZero-style example: visual state, improved policy, final outcome."""
+
+    state_ascii: str
+    turn: bool
+    policy_target: dict[str, float]
+    value_target: float
+
+    def __post_init__(self) -> None:
+        if not self.policy_target:
+            raise ValueError("policy_target must not be empty")
+        total = 0.0
+        for move, weight in self.policy_target.items():
+            try:
+                chess.Move.from_uci(move)
+            except ValueError as exc:
+                raise ValueError(f"invalid UCI move in policy_target: {move!r}") from exc
+            if weight < 0:
+                raise ValueError("policy_target weights must be non-negative")
+            total += weight
+        if total <= 0:
+            raise ValueError("policy_target must have positive total weight")
+        if not -1.0 <= self.value_target <= 1.0:
+            raise ValueError("value_target must be in [-1, 1]")
 
 
-def play_episode(
-    env: ChessEnv,
-    white_policy: Policy,
-    black_policy: Policy,
+@dataclass(frozen=True)
+class GameStats:
+    plies: int
+    result: str | None
+    truncated: bool
+
+
+@dataclass(frozen=True)
+class SelfPlayGame:
+    examples: list[TrainingExample]
+    stats: GameStats
+
+
+def play_self_game(
+    model_evaluator: PolicyValueEvaluator,
+    simulations: int = 64,
     max_plies: int | None = 200,
+    temperature: float = 1.0,
     seed: int | None = None,
-    assign_returns: bool = False,
-) -> Episode:
-    """Run one self-play game by alternating policies until terminal or optional cap."""
+) -> SelfPlayGame:
+    """Generate one NN-guided PUCT self-play game.
+
+    `max_plies=None` means no artificial turn cap: play until python-chess says
+    the game is terminal. Capped non-terminal games are marked truncated and get
+    draw value targets; metrics expose that so loss curves are not mistaken for
+    chess-strength proof.
+    """
 
     if max_plies is not None and max_plies <= 0:
-        raise ValueError("max_plies must be positive")
+        raise ValueError("max_plies must be positive or None")
 
+    board = chess.Board()
     rng = random.Random(seed)
-    obs = env.reset()
-    transitions: list[Transition] = []
-    final_reward = 0.0
-    result = "*"
+    pending: list[tuple[str, bool, dict[str, float]]] = []
+    mcts = PUCTMCTS(evaluator=model_evaluator, iterations=simulations, seed=seed)
 
-    ply_iter = itertools.count() if max_plies is None else range(max_plies)
-    for _ply in ply_iter:
-        board_before = env.board.copy(stack=False)
-        player = board_before.turn
-        policy = white_policy if player == chess.WHITE else black_policy
-        move = policy.select_move(board_before, rng=rng)
-
-        next_obs, reward, done, info = env.step(move)
-        transitions.append(
-            Transition(
-                state_ascii=obs.board_ascii,
-                action_uci=move.uci(),
-                player=player,
-                reward=reward if done else 0.0,
-                done=done,
-                next_state_ascii=next_obs.board_ascii,
-                result=info["result"],
-            )
-        )
-        obs = next_obs
-
-        if done:
-            final_reward = reward
-            result = info["result"]
+    for _ in itertools.count() if max_plies is None else range(max_plies):
+        if board.is_game_over(claim_draw=True):
             break
+        policy = mcts.search_policy(board, add_root_noise=True)
+        pending.append((board_to_ascii(board), board.turn, policy))
+        board.push(chess.Move.from_uci(sample_policy(policy, temperature, rng)))
 
-    if assign_returns:
-        transitions = assign_episode_returns(transitions, final_reward)
+    result = board.result(claim_draw=True) if board.is_game_over(claim_draw=True) else None
+    truncated = result is None
+    white_reward = result_to_white_reward(result)
+    examples = [
+        TrainingExample(
+            state_ascii=state_ascii,
+            turn=turn,
+            policy_target=policy,
+            value_target=white_reward if turn == chess.WHITE else -white_reward,
+        )
+        for state_ascii, turn, policy in pending
+    ]
+    return SelfPlayGame(examples=examples, stats=GameStats(len(pending), result, truncated))
 
-    return Episode(transitions=transitions, result=result, winner_reward=final_reward)
 
+def sample_policy(policy: dict[str, float], temperature: float, rng: random.Random) -> str:
+    if not policy:
+        raise ValueError("cannot sample from empty policy")
+    if temperature < 0:
+        raise ValueError("temperature must be non-negative")
+    if temperature == 0:
+        return max(policy, key=policy.__getitem__)
 
-def assign_episode_returns(transitions: list[Transition], white_reward: float) -> list[Transition]:
-    """Attach terminal outcome as returns from each acting player's perspective."""
+    moves = tuple(policy)
+    weights = [max(policy[move], 0.0) ** (1.0 / temperature) for move in moves]
+    total = sum(weights)
+    if total <= 0:
+        return rng.choice(moves)
 
-    assigned: list[Transition] = []
-    for transition in transitions:
-        actor_return = white_reward if transition.player == chess.WHITE else -white_reward
-        assigned.append(transition.with_return(actor_return))
-    return assigned
+    threshold = rng.random() * total
+    cumulative = 0.0
+    for move, weight in zip(moves, weights):
+        cumulative += weight
+        if cumulative >= threshold:
+            return move
+    return moves[-1]
