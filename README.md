@@ -25,15 +25,23 @@ See `docs/alphago-from-scratch-lessons.md` for the Dwarkesh/Eric Jang AlphaGo-fr
 
 ## Local training
 
-```bash
-uv run rl-chess --episodes 10 --max-plies 80 --seed 123
-```
-
-MCTS self-play smoke run:
+Smoke run:
 
 ```bash
-uv run rl-chess --policy mcts --episodes 1 --max-plies 20 --mcts-iterations 50 --seed 123
+uv run rl-chess --iterations 1 --max-plies 20 --mcts-iterations 8 --seed 123
 ```
+
+Meaningful first run:
+
+```bash
+uv run rl-chess \
+  --first-meaningful-run \
+  --checkpoint-dir runs/first-meaningful/checkpoints \
+  --stockfish-path ~/.local/bin/stockfish \
+  --seed 123
+```
+
+The first-run preset is deliberately still small enough for local iteration but no longer a one-batch smoke test: 3 iterations, 2 self-play games per iteration, 32 PUCT simulations per move, 4 training updates per iteration, replay capacity 5,000, checkpoint after every iteration, and 4 validation games against the Stockfish UCI Elo floor.
 
 ## Modal training
 

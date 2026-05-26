@@ -6,7 +6,8 @@ from rl_chess.env import ChessEnv, board_to_ascii, result_to_white_reward
 from rl_chess.nn_model import PolicyValueNet, PolicyValueTrainer, encode_board_ascii
 from rl_chess.puct_mcts import PUCTMCTS, PolicyValueEvaluator
 from rl_chess.self_play import TrainingExample, sample_policy
-from rl_chess.train import train
+from rl_chess.run_presets import FIRST_MEANINGFUL_RUN
+from rl_chess.train import load_checkpoint_model, train
 from rl_chess.validation import (
     FixedMovePlayer,
     FirstLegalPlayer,
@@ -90,6 +91,35 @@ def test_training_reports_truncation_instead_of_hiding_it_as_learning():
     assert metrics.examples == 4
     assert metrics.truncated_games == 2
     assert len(metrics.loss_curve) == 2
+
+
+def test_training_writes_iteration_checkpoints(tmp_path):
+    model = PolicyValueNet(hidden_channels=8)
+    metrics = train(
+        model=model,
+        iterations=2,
+        games_per_iteration=1,
+        simulations=2,
+        max_plies=2,
+        train_steps=1,
+        seed=3,
+        checkpoint_dir=tmp_path,
+    )
+
+    assert [path.name for path in metrics.checkpoint_paths] == ["iteration-0001.pt", "iteration-0002.pt"]
+    checkpoint = torch.load(metrics.checkpoint_paths[-1], map_location="cpu", weights_only=True)
+    assert checkpoint["metrics"]["checkpoint_paths"][-1].endswith("iteration-0002.pt")
+    reloaded = load_checkpoint_model(metrics.checkpoint_paths[-1])
+    assert isinstance(reloaded, PolicyValueNet)
+
+
+def test_first_meaningful_run_is_bigger_than_smoke_but_bounded():
+    assert FIRST_MEANINGFUL_RUN.iterations >= 3
+    assert FIRST_MEANINGFUL_RUN.games_per_iteration >= 2
+    assert FIRST_MEANINGFUL_RUN.simulations >= 32
+    assert FIRST_MEANINGFUL_RUN.train_steps >= 4
+    assert FIRST_MEANINGFUL_RUN.validation_games >= 4
+    assert FIRST_MEANINGFUL_RUN.max_plies <= 160
 
 
 def test_training_rejects_invalid_public_knobs():
@@ -194,6 +224,36 @@ def test_cli_can_run_stockfish_validation_with_injected_runner(monkeypatch, caps
     assert exit_code == 0
     assert "stockfish_elo=1320" in captured.out
     assert "validation_passed=True" in captured.out
+
+
+def test_cli_first_meaningful_run_applies_preset_and_checkpoint_dir(monkeypatch, tmp_path, capsys):
+    from rl_chess import cli
+    from rl_chess.train import TrainMetrics
+
+    observed = {}
+
+    def fake_train(**kwargs):
+        observed.update(kwargs)
+        return TrainMetrics(
+            iterations=kwargs["iterations"],
+            games=kwargs["iterations"] * kwargs["games_per_iteration"],
+            examples=0,
+            terminal_games=0,
+            truncated_games=0,
+            replay_size=0,
+            checkpoint_paths=[tmp_path / "iteration-0001.pt"],
+        )
+
+    monkeypatch.setattr(cli, "train", fake_train)
+    exit_code = cli.main(["--first-meaningful-run", "--checkpoint-dir", str(tmp_path), "--seed", "7"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert observed["iterations"] == FIRST_MEANINGFUL_RUN.iterations
+    assert observed["games_per_iteration"] == FIRST_MEANINGFUL_RUN.games_per_iteration
+    assert observed["simulations"] == FIRST_MEANINGFUL_RUN.simulations
+    assert observed["checkpoint_dir"] == tmp_path
+    assert "checkpoint_paths=" in captured.out
 
 
 def test_cli_smoke(capsys):

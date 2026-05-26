@@ -63,6 +63,7 @@ class PolicyValueNet(nn.Module):
 
     def __init__(self, hidden_channels: int = 64) -> None:
         super().__init__()
+        self.hidden_channels = hidden_channels
         self.trunk = nn.Sequential(
             nn.Conv2d(13, hidden_channels, 3, padding=1),
             nn.ReLU(),

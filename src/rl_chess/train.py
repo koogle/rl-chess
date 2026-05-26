@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 import random
+from typing import Any
 
 import torch
 
@@ -20,6 +22,43 @@ class TrainMetrics:
     loss_curve: list[float] = field(default_factory=list)
     policy_loss_curve: list[float] = field(default_factory=list)
     value_loss_curve: list[float] = field(default_factory=list)
+    checkpoint_paths: list[Path] = field(default_factory=list)
+
+
+def save_checkpoint(model: PolicyValueNet, path: str | Path, metrics: TrainMetrics | None = None) -> Path:
+    checkpoint_path = Path(path)
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "hidden_channels": model.hidden_channels,
+            "model_state_dict": model.state_dict(),
+            "metrics": None if metrics is None else checkpoint_metrics(metrics),
+        },
+        checkpoint_path,
+    )
+    return checkpoint_path
+
+
+def checkpoint_metrics(metrics: TrainMetrics) -> dict[str, object]:
+    return {
+        "iterations": metrics.iterations,
+        "games": metrics.games,
+        "examples": metrics.examples,
+        "terminal_games": metrics.terminal_games,
+        "truncated_games": metrics.truncated_games,
+        "replay_size": metrics.replay_size,
+        "loss_curve": list(metrics.loss_curve),
+        "policy_loss_curve": list(metrics.policy_loss_curve),
+        "value_loss_curve": list(metrics.value_loss_curve),
+        "checkpoint_paths": [str(path) for path in metrics.checkpoint_paths],
+    }
+
+
+def load_checkpoint_model(path: str | Path) -> PolicyValueNet:
+    checkpoint: dict[str, Any] = torch.load(Path(path), map_location="cpu", weights_only=True)
+    model = PolicyValueNet(hidden_channels=int(checkpoint["hidden_channels"]))
+    model.load_state_dict(checkpoint["model_state_dict"])
+    return model
 
 
 def train(
@@ -34,6 +73,7 @@ def train(
     learning_rate: float = 1e-3,
     temperature: float = 1.0,
     seed: int | None = None,
+    checkpoint_dir: str | Path | None = None,
 ) -> TrainMetrics:
     if iterations <= 0:
         raise ValueError("iterations must be positive")
@@ -62,6 +102,7 @@ def train(
     losses: list[float] = []
     policy_losses: list[float] = []
     value_losses: list[float] = []
+    checkpoint_paths: list[Path] = []
     examples = 0
     terminal_games = 0
     truncated_games = 0
@@ -91,6 +132,22 @@ def train(
             policy_losses.append(stats.policy_loss)
             value_losses.append(stats.value_loss)
 
+        if checkpoint_dir is not None:
+            checkpoint_path = Path(checkpoint_dir) / f"iteration-{iteration + 1:04d}.pt"
+            snapshot = TrainMetrics(
+                iterations=iteration + 1,
+                games=(iteration + 1) * games_per_iteration,
+                examples=examples,
+                terminal_games=terminal_games,
+                truncated_games=truncated_games,
+                replay_size=len(replay),
+                loss_curve=list(losses),
+                policy_loss_curve=list(policy_losses),
+                value_loss_curve=list(value_losses),
+                checkpoint_paths=[*checkpoint_paths, checkpoint_path],
+            )
+            checkpoint_paths.append(save_checkpoint(model, checkpoint_path, snapshot))
+
     return TrainMetrics(
         iterations=iterations,
         games=iterations * games_per_iteration,
@@ -101,4 +158,5 @@ def train(
         loss_curve=losses,
         policy_loss_curve=policy_losses,
         value_loss_curve=value_losses,
+        checkpoint_paths=checkpoint_paths,
     )
