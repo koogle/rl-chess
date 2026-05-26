@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+import shutil
 from typing import Protocol
 
 import chess
@@ -47,6 +49,20 @@ def stockfish_strength_config(elo: int, options: dict[str, object]) -> dict[str,
 class Player(Protocol):
     def select_move(self, board: chess.Board) -> chess.Move:
         ...
+
+
+def resolve_stockfish_path(path: str = "stockfish") -> str:
+    """Find Stockfish across local Linux and Debian package layouts."""
+
+    if Path(path).is_file():
+        return path
+    resolved = shutil.which(path)
+    if resolved is not None:
+        return resolved
+    for candidate in ("/usr/games/stockfish", "/usr/local/bin/stockfish"):
+        if Path(candidate).is_file():
+            return candidate
+    return path
 
 
 @dataclass(frozen=True)
@@ -124,7 +140,7 @@ class StockfishPlayer:
         self.engine: chess.engine.SimpleEngine | None = None
 
     def __enter__(self) -> StockfishPlayer:
-        engine = chess.engine.SimpleEngine.popen_uci(self.path)
+        engine = chess.engine.SimpleEngine.popen_uci(resolve_stockfish_path(self.path))
         engine.configure(stockfish_strength_config(self.elo, engine.options))
         self.engine = engine
         return self

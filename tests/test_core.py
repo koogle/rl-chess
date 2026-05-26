@@ -12,6 +12,7 @@ from rl_chess.validation import (
     FixedMovePlayer,
     FirstLegalPlayer,
     ValidationResult,
+    resolve_stockfish_path,
     stockfish_strength_config,
     play_validation_game,
 )
@@ -190,6 +191,12 @@ def test_training_example_rejects_invalid_policy_targets():
 def test_sample_policy_rejects_negative_temperature():
     with pytest.raises(ValueError):
         sample_policy({"e2e4": 1.0}, temperature=-0.1, rng=__import__("random").Random(1))
+
+
+def test_stockfish_path_resolver_handles_debian_usr_games_layout(tmp_path):
+    stockfish = tmp_path / "stockfish"
+    stockfish.write_text("#!/bin/sh\n", encoding="utf-8")
+    assert resolve_stockfish_path(str(stockfish)) == str(stockfish)
 
 
 def test_stockfish_supported_elo_floor_uses_uci_limit_strength():
