@@ -20,6 +20,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rollout-depth", type=int, default=80, help="Random rollout depth for MCTS leaf evaluation.")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducible runs.")
     parser.add_argument("--hidden-channels", type=int, default=32, help="Hidden channels for the neural policy/value net.")
+    parser.add_argument("--rollout-mcts", action="store_true", help="For nn-train, use random-rollout MCTS teacher instead of NN-guided PUCT.")
     return parser
 
 
@@ -34,6 +35,7 @@ def main(argv: list[str] | None = None) -> int:
             mcts_iterations=args.mcts_iterations,
             rollout_depth=args.rollout_depth,
             learning_rate=args.learning_rate,
+            neural_search=not args.rollout_mcts,
             seed=args.seed,
         )
         print(
@@ -43,6 +45,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"episodes={metrics.episodes}",
                     f"total_plies={metrics.total_plies}",
                     f"examples_collected={metrics.examples_collected}",
+                    f"search={metrics.search_kind}",
                     "loss_curve=" + ",".join(f"{loss:.6f}" for loss in metrics.loss_curve),
                     "policy_loss_curve=" + ",".join(f"{loss:.6f}" for loss in metrics.policy_loss_curve),
                     "value_loss_curve=" + ",".join(f"{loss:.6f}" for loss in metrics.value_loss_curve),

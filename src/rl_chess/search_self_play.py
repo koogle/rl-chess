@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 import itertools
+from typing import Protocol
 
 import chess
 
@@ -12,9 +13,14 @@ from rl_chess.self_play import assign_episode_returns
 from rl_chess.replay import Transition
 
 
+class SearchPolicy(Protocol):
+    def search_policy(self, board: chess.Board, rng: random.Random | None = None) -> dict[str, float]:
+        ...
+
+
 def collect_search_episode(
     env: ChessEnv,
-    mcts: MCTS,
+    mcts: SearchPolicy,
     max_plies: int | None = 200,
     seed: int | None = None,
 ) -> list[SearchTrainingExample]:

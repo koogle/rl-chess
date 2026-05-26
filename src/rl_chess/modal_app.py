@@ -21,6 +21,7 @@ def train_remote(
     mcts_iterations: int = 50,
     rollout_depth: int = 20,
     hidden_channels: int = 32,
+    neural_search: bool = True,
     seed: int | None = None,
 ) -> dict[str, object]:
     """Run the exact same hand-written training loops on Modal."""
@@ -59,6 +60,7 @@ def train_remote(
             mcts_iterations=mcts_iterations,
             rollout_depth=rollout_depth,
             learning_rate=learning_rate,
+            neural_search=neural_search,
             seed=seed,
         )
         return {
@@ -66,6 +68,7 @@ def train_remote(
             "episodes": metrics.episodes,
             "total_plies": metrics.total_plies,
             "examples_collected": metrics.examples_collected,
+            "search": metrics.search_kind,
             "loss_curve": metrics.loss_curve,
             "policy_loss_curve": metrics.policy_loss_curve,
             "value_loss_curve": metrics.value_loss_curve,
@@ -108,6 +111,7 @@ def main(
     mcts_iterations: int = 50,
     rollout_depth: int = 20,
     hidden_channels: int = 32,
+    neural_search: bool = True,
     seed: int | None = None,
 ) -> None:
     """CLI entrypoint: modal run src/rl_chess/modal_app.py --episodes 1000"""
@@ -121,6 +125,7 @@ def main(
         mcts_iterations=mcts_iterations,
         rollout_depth=rollout_depth,
         hidden_channels=hidden_channels,
+        neural_search=neural_search,
         seed=seed,
     )
     print(summary)

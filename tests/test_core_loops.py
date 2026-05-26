@@ -257,6 +257,7 @@ def test_cli_can_run_neural_mcts_training_smoke(capsys):
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "policy=nn-train" in captured.out
+    assert "search=puct" in captured.out
     assert "loss_curve=" in captured.out
     assert "policy_loss_curve=" in captured.out
     assert "value_loss_curve=" in captured.out

@@ -7,7 +7,8 @@ import torch
 from rl_chess.agents import TabularMoveValueAgent, TabularPolicyDistiller
 from rl_chess.env import ChessEnv
 from rl_chess.mcts import MCTS, RandomRolloutEvaluator
-from rl_chess.nn_model import ChessPolicyValueNet, NeuralPolicyValueTrainer
+from rl_chess.nn_model import ChessPolicyValueNet, NeuralPolicyValueEvaluator, NeuralPolicyValueTrainer
+from rl_chess.puct_mcts import PUCTMCTS
 from rl_chess.replay import ReplayBuffer
 from rl_chess.search_self_play import collect_search_episode
 from rl_chess.self_play import play_episode
@@ -38,6 +39,7 @@ class NeuralMCTSTrainMetrics:
     loss_curve: list[float] = field(default_factory=list)
     policy_loss_curve: list[float] = field(default_factory=list)
     value_loss_curve: list[float] = field(default_factory=list)
+    search_kind: str = "puct"
 
 
 def train_self_play(
@@ -136,9 +138,10 @@ def train_neural_mcts_self_play(
     mcts_iterations: int = 50,
     rollout_depth: int = 20,
     learning_rate: float = 1e-3,
+    neural_search: bool = True,
     seed: int | None = None,
 ) -> NeuralMCTSTrainMetrics:
-    """AlphaGo-style loop: MCTS self-play then neural policy/value update."""
+    """AlphaZero-style loop: NN-guided PUCT self-play then policy/value update."""
 
     if episodes <= 0:
         raise ValueError("episodes must be positive")
@@ -155,11 +158,18 @@ def train_neural_mcts_self_play(
 
     for episode_idx in range(episodes):
         episode_seed = None if seed is None else seed + episode_idx
-        mcts = MCTS(
-            iterations=mcts_iterations,
-            evaluator=RandomRolloutEvaluator(max_depth=rollout_depth),
-            seed=episode_seed,
-        )
+        if neural_search:
+            mcts = PUCTMCTS(
+                evaluator=NeuralPolicyValueEvaluator(model),
+                iterations=mcts_iterations,
+                seed=episode_seed,
+            )
+        else:
+            mcts = MCTS(
+                iterations=mcts_iterations,
+                evaluator=RandomRolloutEvaluator(max_depth=rollout_depth),
+                seed=episode_seed,
+            )
         examples = collect_search_episode(
             env=ChessEnv(),
             mcts=mcts,
@@ -180,4 +190,5 @@ def train_neural_mcts_self_play(
         loss_curve=loss_curve,
         policy_loss_curve=policy_loss_curve,
         value_loss_curve=value_loss_curve,
+        search_kind="puct" if neural_search else "rollout-mcts",
     )

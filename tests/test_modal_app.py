@@ -39,6 +39,7 @@ def test_modal_training_function_can_run_neural_mcts_training_locally():
     )
 
     assert summary["policy"] == "nn-train"
+    assert summary["search"] == "puct"
     assert summary["episodes"] == 2
     assert summary["examples_collected"] == 4
     assert len(summary["loss_curve"]) == 2

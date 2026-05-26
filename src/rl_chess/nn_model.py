@@ -159,3 +159,58 @@ class NeuralPolicyValueTrainer:
         legal_indices = torch.tensor([action_index(move) for move in legal_moves], dtype=torch.long)
         legal_probs = torch.softmax(logits[0, legal_indices], dim=0)
         return {move: float(prob) for move, prob in zip(legal_moves, legal_probs)}
+
+
+@dataclass
+class NeuralPolicyValueEvaluator:
+    """Use the neural policy/value net as a PUCT evaluator.
+
+    The model's value head is trained from the side-to-move perspective. MCTS
+    backpropagation expects values from White's perspective, so black-to-move
+    values are negated before being returned.
+    """
+
+    model: ChessPolicyValueNet
+
+    @torch.no_grad()
+    def evaluate(self, board: chess.Board) -> tuple[dict[str, float], float]:
+        self.model.eval()
+        legal_moves = tuple(move.uci() for move in board.legal_moves)
+        if not legal_moves:
+            return {}, 0.0
+
+        state_ascii = _board_to_ascii_without_env_import(board)
+        state = encode_board_ascii(state_ascii, board.turn).unsqueeze(0)
+        logits, values = self.model(state)
+        legal_indices = torch.tensor([action_index(move) for move in legal_moves], dtype=torch.long)
+        legal_probs = torch.softmax(logits[0, legal_indices], dim=0)
+        side_to_move_value = float(values[0])
+        white_value = side_to_move_value if board.turn == chess.WHITE else -side_to_move_value
+        return {move: float(prob) for move, prob in zip(legal_moves, legal_probs)}, white_value
+
+
+def _board_to_ascii_without_env_import(board: chess.Board) -> str:
+    files = "a b c d e f g h"
+    lines = [f"  {files}"]
+    white_symbols = {
+        chess.PAWN: "♙",
+        chess.KNIGHT: "♘",
+        chess.BISHOP: "♗",
+        chess.ROOK: "♖",
+        chess.QUEEN: "♕",
+        chess.KING: "♔",
+    }
+    black_symbols = str.maketrans("♙♘♗♖♕♔", "♟♞♝♜♛♚")
+    for rank in range(7, -1, -1):
+        row: list[str] = []
+        for file in range(8):
+            piece = board.piece_at(chess.square(file, rank))
+            if piece is None:
+                row.append(".")
+                continue
+            symbol = white_symbols[piece.piece_type]
+            row.append(symbol if piece.color == chess.WHITE else symbol.translate(black_symbols))
+        rank_label = str(rank + 1)
+        lines.append(f"{rank_label} {' '.join(row)} {rank_label}")
+    lines.append(f"  {files}")
+    return "\n".join(lines)
