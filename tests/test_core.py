@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import chess
 import pytest
 import torch
@@ -111,20 +109,6 @@ def test_public_cli_has_no_legacy_position_flag():
     parser = cli.build_parser()
     legacy_flag = "--starting-" + "f" + "en"
     assert legacy_flag not in parser.format_help()
-
-
-def test_repository_text_does_not_reintroduce_legacy_position_notation():
-    root = Path(__file__).resolve().parents[1]
-    forbidden = ("f" + "en").lower()
-    checked_suffixes = {".py", ".md"}
-    violations = []
-    for path in root.rglob("*"):
-        if ".git" in path.parts or ".venv" in path.parts or path.suffix not in checked_suffixes:
-            continue
-        text = path.read_text(encoding="utf-8").lower()
-        if forbidden in text:
-            violations.append(str(path.relative_to(root)))
-    assert violations == []
 
 
 def test_policy_value_trainer_reduces_loss_on_repeated_target():

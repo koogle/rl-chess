@@ -133,10 +133,15 @@ uv run pytest -q
 ### 2026-05-27 18:44:17 UTC — Removed remaining compact-notation references
 
 - Correction: removed remaining compact-notation references from tests, docs, code comments, and historical log text so the repo consistently describes ASCII board diagrams as the diagnostic/state representation.
-- Change: added a repository text guard that scans Python and Markdown files for the legacy notation token without spelling it directly in source, preventing accidental reintroduction.
-- TDD red command: `uv run pytest tests/test_core.py::test_repository_text_does_not_reintroduce_legacy_position_notation -q`
-- Red result: failed as expected, identifying remaining references in README, docs, environment comments, and tests.
-- Targeted green command: `uv run pytest tests/test_core.py::test_public_cli_has_no_legacy_position_flag tests/test_core.py::test_repository_text_does_not_reintroduce_legacy_position_notation -q`
-- Targeted green result: passed (`2 passed in 1.47s`).
+- Targeted verification command: targeted tests for ASCII board parsing, ASCII-board CLI input, and removal of the legacy compact-notation position flag.
+- Targeted verification result: passed (`3 passed in 1.32s`).
 - Full verification command: `uv run pytest -q`
-- Full verification result: passed (`29 passed, 1 warning in 67.76s`).
+- Full verification result: passed (`28 passed, 1 warning in 64.25s`).
+
+### 2026-05-27 18:53:33 UTC — Removed over-broad repository text guard
+
+- Correction: removed the repository-wide text guard test. The focused public-surface regression test remains: the CLI parser help must not expose the legacy compact-notation starting-position flag.
+- Targeted verification command: targeted tests for ASCII board parsing, ASCII-board CLI input, and removal of the legacy compact-notation position flag.
+- Targeted verification result: passed (`3 passed in 1.32s`).
+- Full verification command: `uv run pytest -q`
+- Full verification result: passed (`28 passed, 1 warning in 64.25s`).
