@@ -107,7 +107,7 @@ def build_value_dataset(fens: list[str], depth: int) -> list[TrainingExample]:
 def train_value_batch(model: PolicyValueNet, optimizer: torch.optim.Optimizer, examples: list[TrainingExample]) -> float:
     model.train()
     device = next(model.parameters()).device
-    states = torch.stack([model.encode_board_ascii(example.state_ascii, example.turn) for example in examples]).to(device)
+    states = torch.stack([model.encode_board_ascii(example.state_ascii) for example in examples]).to(device)
     targets = torch.tensor([example.value_target for example in examples], dtype=torch.float32, device=device)
     _logits, values = model(states)
     loss = F.mse_loss(values, targets)
@@ -121,7 +121,7 @@ def train_value_batch(model: PolicyValueNet, optimizer: torch.optim.Optimizer, e
 def evaluate_values(model: PolicyValueNet, examples: list[TrainingExample]) -> dict[str, float]:
     model.eval()
     device = next(model.parameters()).device
-    states = torch.stack([model.encode_board_ascii(example.state_ascii, example.turn) for example in examples]).to(device)
+    states = torch.stack([model.encode_board_ascii(example.state_ascii) for example in examples]).to(device)
     targets = torch.tensor([example.value_target for example in examples], dtype=torch.float32, device=device)
     _logits, values = model(states)
     sign_hits = ((values * targets) > 0).float().mean().item()

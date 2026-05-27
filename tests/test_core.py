@@ -39,12 +39,14 @@ def test_env_uses_unicode_board_and_python_chess_legality():
     assert "e7e5" in next_obs.legal_moves
 
 
-def test_board_encoder_preserves_visual_state_and_side_to_move():
+def test_board_encoder_preserves_visual_state_without_side_to_move_plane():
     board = chess.Board()
-    encoded = PolicyValueNet.encode_board_ascii(board_to_ascii(board), board.turn)
-    assert encoded.shape == (13, 8, 8)
-    assert encoded[:12].sum().item() == 32
-    assert encoded[12].sum().item() == 64
+    encoded_white = PolicyValueNet.encode_board_ascii(board_to_ascii(board))
+    board.turn = chess.BLACK
+    encoded_black = PolicyValueNet.encode_board_ascii(board_to_ascii(board))
+    assert encoded_white.shape == (12, 8, 8)
+    assert encoded_white.sum().item() == 32
+    assert torch.equal(encoded_white, encoded_black)
 
 
 def test_puct_uses_priors_for_visit_policy():
@@ -81,7 +83,7 @@ def test_model_is_the_puct_evaluator():
 def test_model_uses_a_deeper_residual_tower():
     model = PolicyValueNet(hidden_channels=8, residual_blocks=3)
     assert model.residual_blocks == 3
-    logits, values = model(torch.zeros((2, 13, 8, 8)))
+    logits, values = model(torch.zeros((2, 12, 8, 8)))
     assert logits.shape == (2, 64 * 64 * 5)
     assert values.shape == (2,)
 
