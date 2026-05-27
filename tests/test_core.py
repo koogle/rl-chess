@@ -6,7 +6,7 @@ from rl_chess.endgame_validation import DEFAULT_ENDGAME_FENS, build_value_datase
 from rl_chess.env import ChessEnv, board_to_ascii, result_to_white_reward
 from rl_chess.nn_model import PolicyValueNet, train_batch
 from rl_chess.puct_mcts import PUCTMCTS, PolicyValueEvaluator
-from rl_chess.self_play import TrainingExample, sample_policy
+from rl_chess.self_play import TrainingExample, play_self_game, sample_policy
 from rl_chess.run_presets import FIRST_MEANINGFUL_RUN
 from rl_chess.train import load_checkpoint_model, train
 from rl_chess.validation import (
@@ -95,19 +95,27 @@ def test_self_play_can_be_uncapped_until_terminal_from_mate_in_one():
     assert result_to_white_reward(info["result"]) == reward == 1.0
 
 
-def test_training_reports_truncation_instead_of_hiding_it_as_learning():
+def test_self_play_rejects_safety_cap_instead_of_truncating_game():
+    with pytest.raises(RuntimeError, match="non-terminal self-play game reached safety cap"):
+        play_self_game(E4Evaluator(), simulations=1, max_plies=1, seed=3)
+
+
+def test_training_metrics_do_not_report_truncation():
+    starting_board = chess.Board("8/8/8/8/8/8/8/K1kQ4 b - - 0 1")
     metrics = train(
         model=PolicyValueNet(hidden_channels=8),
         iterations=2,
         games_per_iteration=1,
         simulations=2,
-        max_plies=2,
+        max_plies=1,
         train_steps=1,
+        starting_board=starting_board,
         seed=3,
     )
     assert metrics.games == 2
-    assert metrics.examples == 4
-    assert metrics.truncated_games == 2
+    assert metrics.examples == 2
+    assert metrics.terminal_games == 2
+    assert not hasattr(metrics, "truncated_games")
     assert len(metrics.loss_curve) == 2
 
 
@@ -118,8 +126,9 @@ def test_training_writes_iteration_checkpoints(tmp_path):
         iterations=2,
         games_per_iteration=1,
         simulations=2,
-        max_plies=2,
+        max_plies=1,
         train_steps=1,
+        starting_board=chess.Board("8/8/8/8/8/8/8/K1kQ4 b - - 0 1"),
         seed=3,
         checkpoint_dir=tmp_path,
     )
@@ -139,7 +148,7 @@ def test_first_meaningful_run_is_bigger_than_smoke_but_bounded():
     assert FIRST_MEANINGFUL_RUN.hidden_channels >= 64
     assert FIRST_MEANINGFUL_RUN.residual_blocks >= 4
     assert FIRST_MEANINGFUL_RUN.validation_games >= 4
-    assert FIRST_MEANINGFUL_RUN.max_plies <= 160
+    assert FIRST_MEANINGFUL_RUN.max_plies is None
 
 
 def test_modal_remote_training_entrypoint_can_run_tiny_local_smoke():
@@ -154,6 +163,7 @@ def test_modal_remote_training_entrypoint_can_run_tiny_local_smoke():
         batch_size=1,
         hidden_channels=8,
         residual_blocks=0,
+        starting_fen="8/8/8/8/8/8/8/K1kQ4 b - - 0 1",
         seed=1,
     )
     assert summary["loop"] == "nn-puct"
@@ -301,6 +311,8 @@ def test_cli_can_run_stockfish_validation_with_injected_runner(monkeypatch, caps
         "2",
         "--hidden-channels",
         "8",
+        "--starting-fen",
+        "8/8/8/8/8/8/8/K1kQ4 b - - 0 1",
         "--validate-stockfish",
         "--validation-games",
         "1",
@@ -326,7 +338,6 @@ def test_cli_first_meaningful_run_applies_preset_and_checkpoint_dir(monkeypatch,
             games=kwargs["iterations"] * kwargs["games_per_iteration"],
             examples=0,
             terminal_games=0,
-            truncated_games=0,
             replay_size=0,
             checkpoint_paths=[tmp_path / "iteration-0001.pt"],
         )
@@ -350,8 +361,21 @@ def test_cli_first_meaningful_run_applies_preset_and_checkpoint_dir(monkeypatch,
 def test_cli_smoke(capsys):
     from rl_chess.cli import main
 
-    exit_code = main(["--iterations", "1", "--max-plies", "2", "--mcts-iterations", "2", "--hidden-channels", "8", "--seed", "1"])
+    exit_code = main([
+        "--iterations",
+        "1",
+        "--max-plies",
+        "1",
+        "--mcts-iterations",
+        "2",
+        "--hidden-channels",
+        "8",
+        "--starting-fen",
+        "8/8/8/8/8/8/8/K1kQ4 b - - 0 1",
+        "--seed",
+        "1",
+    ])
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "loop=nn-puct" in captured.out
-    assert "truncated_games=" in captured.out
+    assert "truncated_games=" not in captured.out

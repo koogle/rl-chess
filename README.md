@@ -28,8 +28,11 @@ See `docs/alphago-from-scratch-lessons.md` for the Dwarkesh/Eric Jang AlphaGo-fr
 Smoke run:
 
 ```bash
-uv run rl-chess --iterations 1 --max-plies 20 --mcts-iterations 8 --seed 123
+uv run rl-chess --iterations 1 --max-plies 1 --mcts-iterations 2 \
+  --starting-fen "8/8/8/8/8/8/8/K1kQ4 b - - 0 1" --seed 123
 ```
+
+`--max-plies` is a safety cap, not a training truncation mechanism. If a game reaches the cap while non-terminal, the run raises instead of converting the unfinished game into a draw target. Omit the flag, or pass `0`, for uncapped self-play that runs until `python-chess` reports a terminal result.
 
 Meaningful first run:
 
@@ -46,7 +49,7 @@ The first-run preset is deliberately still small enough for local iteration but 
 ## Modal training
 
 ```bash
-uv run modal run src/rl_chess/modal_app.py --episodes 1000 --max-plies 200 --seed 123
+uv run modal run src/rl_chess/modal_app.py --episodes 1000 --seed 123
 ```
 
 The Modal app runs the same `train_self_play` function remotely, so local and remote execution share one core loop.
@@ -102,3 +105,16 @@ uv run pytest -q
 - Checkpoints: `/checkpoints/first-meaningful-run/iteration-0001.pt`, `/checkpoints/first-meaningful-run/iteration-0002.pt`, `/checkpoints/first-meaningful-run/iteration-0003.pt`.
 - Stockfish validation: Elo `1320`, `validation_games=4`, `wins=0`, `losses=4`, `draws=0`, `score=0.000`, `validation_passed=False`.
 - Interpretation: the loop runs end-to-end and produces checkpoints, but this first meaningful preset is still too weak to score against Stockfish's supported Elo floor.
+
+### 2026-05-27 18:25:30 UTC — Removed self-play truncation as a learning target
+
+- Correction: reverted the mistaken side-to-move input-plane removal. The model again receives the side-to-move plane.
+- Change: removed truncation from self-play/training metrics and checkpoint summaries. Self-play now either reaches a terminal `python-chess` result or raises if an optional safety `max_plies` cap is hit while non-terminal.
+- Change: first-meaningful training preset now uses uncapped self-play (`max_plies=None`). CLI/Modal `--max-plies` remains only as a safety cap; `0`/omitted means no cap.
+- Change: added optional `--starting-fen` / `starting_fen` support for deterministic smoke tests without relying on artificial truncation.
+- TDD red command: `uv run pytest tests/test_core.py::test_self_play_rejects_safety_cap_instead_of_truncating_game tests/test_core.py::test_training_metrics_do_not_report_truncation tests/test_core.py::test_first_meaningful_run_is_bigger_than_smoke_but_bounded -q`
+- Red result: failed as expected because capped non-terminal self-play still returned a truncated game, `train()` did not accept `starting_board`, and `FIRST_MEANINGFUL_RUN.max_plies` was still `120`.
+- Targeted green command: `uv run pytest tests/test_core.py::test_self_play_rejects_safety_cap_instead_of_truncating_game tests/test_core.py::test_training_metrics_do_not_report_truncation tests/test_core.py::test_first_meaningful_run_is_bigger_than_smoke_but_bounded tests/test_core.py::test_cli_smoke tests/test_core.py::test_modal_remote_training_entrypoint_can_run_tiny_local_smoke -q`
+- Targeted green result: passed (`5 passed, 1 warning in 2.64s`).
+- Full verification command: `uv run pytest -q`
+- Full verification result: passed (`25 passed, 1 warning in 61.70s`).

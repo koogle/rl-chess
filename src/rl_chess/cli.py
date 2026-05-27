@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import chess
+
 from rl_chess.nn_model import PolicyValueNet
 from rl_chess.run_presets import FIRST_MEANINGFUL_RUN
 from rl_chess.train import load_checkpoint_model, train
@@ -18,7 +20,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--iterations", "--episodes", dest="iterations", type=int, default=10)
     parser.add_argument("--games-per-iteration", type=int, default=1)
-    parser.add_argument("--max-plies", type=int, default=200, help="Maximum plies per game; 0 means no cap.")
+    parser.add_argument(
+        "--max-plies",
+        type=int,
+        default=0,
+        help="Optional safety cap; 0 means no cap. Reaching it raises instead of truncating.",
+    )
+    parser.add_argument("--starting-fen", default=None, help="Optional starting FEN for diagnostics and smoke tests.")
     parser.add_argument("--mcts-iterations", "--simulations", dest="simulations", type=int, default=64)
     parser.add_argument("--train-steps", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=64)
@@ -86,6 +94,7 @@ def main(argv: list[str] | None = None) -> int:
         temperature=args.temperature,
         seed=args.seed,
         checkpoint_dir=args.checkpoint_dir,
+        starting_board=None if args.starting_fen is None else chess.Board(args.starting_fen),
     )
     summary = [
         "loop=nn-puct",
@@ -93,7 +102,6 @@ def main(argv: list[str] | None = None) -> int:
         f"games={metrics.games}",
         f"examples={metrics.examples}",
         f"terminal_games={metrics.terminal_games}",
-        f"truncated_games={metrics.truncated_games}",
         f"replay_size={metrics.replay_size}",
         "loss_curve=" + ",".join(f"{loss:.6f}" for loss in metrics.loss_curve),
         "policy_loss_curve=" + ",".join(f"{loss:.6f}" for loss in metrics.policy_loss_curve),

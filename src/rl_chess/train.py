@@ -17,7 +17,6 @@ class TrainMetrics:
     games: int
     examples: int
     terminal_games: int
-    truncated_games: int
     replay_size: int
     loss_curve: list[float] = field(default_factory=list)
     policy_loss_curve: list[float] = field(default_factory=list)
@@ -46,7 +45,6 @@ def checkpoint_metrics(metrics: TrainMetrics) -> dict[str, object]:
         "games": metrics.games,
         "examples": metrics.examples,
         "terminal_games": metrics.terminal_games,
-        "truncated_games": metrics.truncated_games,
         "replay_size": metrics.replay_size,
         "loss_curve": list(metrics.loss_curve),
         "policy_loss_curve": list(metrics.policy_loss_curve),
@@ -70,7 +68,7 @@ def train(
     iterations: int,
     games_per_iteration: int = 1,
     simulations: int = 64,
-    max_plies: int | None = 200,
+    max_plies: int | None = None,
     train_steps: int = 1,
     batch_size: int = 64,
     replay_capacity: int = 10_000,
@@ -78,6 +76,7 @@ def train(
     temperature: float = 1.0,
     seed: int | None = None,
     checkpoint_dir: str | Path | None = None,
+    starting_board: Any | None = None,
 ) -> TrainMetrics:
     if iterations <= 0:
         raise ValueError("iterations must be positive")
@@ -109,7 +108,6 @@ def train(
     checkpoint_paths: list[Path] = []
     examples = 0
     terminal_games = 0
-    truncated_games = 0
 
     for iteration in range(iterations):
         for game_idx in range(games_per_iteration):
@@ -120,12 +118,12 @@ def train(
                 max_plies=max_plies,
                 temperature=temperature,
                 seed=game_seed,
+                starting_board=starting_board,
             )
             replay.extend(game.examples)
             del replay[:-replay_capacity]
             examples += len(game.examples)
-            terminal_games += int(not game.stats.truncated)
-            truncated_games += int(game.stats.truncated)
+            terminal_games += 1
 
         for _ in range(train_steps):
             if not replay:
@@ -143,7 +141,6 @@ def train(
                 games=(iteration + 1) * games_per_iteration,
                 examples=examples,
                 terminal_games=terminal_games,
-                truncated_games=truncated_games,
                 replay_size=len(replay),
                 loss_curve=list(losses),
                 policy_loss_curve=list(policy_losses),
@@ -157,7 +154,6 @@ def train(
         games=iterations * games_per_iteration,
         examples=examples,
         terminal_games=terminal_games,
-        truncated_games=truncated_games,
         replay_size=len(replay),
         loss_curve=losses,
         policy_loss_curve=policy_losses,

@@ -8,7 +8,7 @@ class TrainingRunConfig:
     iterations: int
     games_per_iteration: int
     simulations: int
-    max_plies: int
+    max_plies: int | None
     train_steps: int
     batch_size: int
     replay_capacity: int
@@ -24,7 +24,7 @@ FIRST_MEANINGFUL_RUN = TrainingRunConfig(
     iterations=3,
     games_per_iteration=2,
     simulations=32,
-    max_plies=120,
+    max_plies=None,
     train_steps=4,
     batch_size=128,
     replay_capacity=5_000,

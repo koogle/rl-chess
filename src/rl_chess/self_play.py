@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import itertools
 import random
 
 import chess
@@ -40,8 +39,7 @@ class TrainingExample:
 @dataclass(frozen=True)
 class GameStats:
     plies: int
-    result: str | None
-    truncated: bool
+    result: str
 
 
 @dataclass(frozen=True)
@@ -53,35 +51,38 @@ class SelfPlayGame:
 def play_self_game(
     model_evaluator: PolicyValueEvaluator,
     simulations: int = 64,
-    max_plies: int | None = 200,
+    max_plies: int | None = None,
     temperature: float = 1.0,
     seed: int | None = None,
+    starting_board: chess.Board | None = None,
 ) -> SelfPlayGame:
     """Generate one NN-guided PUCT self-play game.
 
-    `max_plies=None` means no artificial turn cap: play until python-chess says
-    the game is terminal. Capped non-terminal games are marked truncated and get
-    draw value targets; metrics expose that so loss curves are not mistaken for
-    chess-strength proof.
+    Games always play until python-chess says the position is terminal. A
+    `max_plies` value is only a safety guard: reaching it on a non-terminal game
+    raises instead of turning an incomplete game into a draw target.
     """
 
     if max_plies is not None and max_plies <= 0:
         raise ValueError("max_plies must be positive or None")
 
-    board = chess.Board()
+    board = starting_board.copy(stack=False) if starting_board is not None else chess.Board()
     rng = random.Random(seed)
     pending: list[tuple[str, bool, dict[str, float]]] = []
     mcts = PUCTMCTS(evaluator=model_evaluator, iterations=simulations, seed=seed)
 
-    for _ in itertools.count() if max_plies is None else range(max_plies):
+    plies = 0
+    while True:
         if board.is_game_over(claim_draw=True):
             break
+        if max_plies is not None and plies >= max_plies:
+            raise RuntimeError("non-terminal self-play game reached safety cap")
         policy = mcts.search_policy(board, add_root_noise=True)
         pending.append((board_to_ascii(board), board.turn, policy))
         board.push(chess.Move.from_uci(sample_policy(policy, temperature, rng)))
+        plies += 1
 
-    result = board.result(claim_draw=True) if board.is_game_over(claim_draw=True) else None
-    truncated = result is None
+    result = board.result(claim_draw=True)
     white_reward = result_to_white_reward(result)
     examples = [
         TrainingExample(
@@ -92,7 +93,7 @@ def play_self_game(
         )
         for state_ascii, turn, policy in pending
     ]
-    return SelfPlayGame(examples=examples, stats=GameStats(len(pending), result, truncated))
+    return SelfPlayGame(examples=examples, stats=GameStats(len(pending), result))
 
 
 def sample_policy(policy: dict[str, float], temperature: float, rng: random.Random) -> str:

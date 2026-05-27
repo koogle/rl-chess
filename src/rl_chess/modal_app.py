@@ -24,7 +24,6 @@ def _jsonable_metrics(metrics: Any) -> dict[str, object]:
         "games": metrics.games,
         "examples": metrics.examples,
         "terminal_games": metrics.terminal_games,
-        "truncated_games": metrics.truncated_games,
         "replay_size": metrics.replay_size,
         "loss_curve": metrics.loss_curve,
         "policy_loss_curve": metrics.policy_loss_curve,
@@ -37,7 +36,7 @@ def _jsonable_metrics(metrics: Any) -> dict[str, object]:
 def train_remote(
     iterations: int = 10,
     games_per_iteration: int = 1,
-    max_plies: int | None = 200,
+    max_plies: int | None = None,
     simulations: int = 64,
     train_steps: int = 1,
     batch_size: int = 64,
@@ -54,7 +53,10 @@ def train_remote(
     validation_max_plies: int = 200,
     stockfish_movetime: float = 0.05,
     seed: int | None = None,
+    starting_fen: str | None = None,
 ) -> dict[str, object]:
+    import chess
+
     from rl_chess.nn_model import PolicyValueNet
     from rl_chess.run_presets import FIRST_MEANINGFUL_RUN
     from rl_chess.train import train
@@ -92,6 +94,7 @@ def train_remote(
         temperature=temperature,
         seed=seed,
         checkpoint_dir=checkpoint_dir,
+        starting_board=None if starting_fen is None else chess.Board(starting_fen),
     )
     summary = _jsonable_metrics(metrics)
     summary.update(
@@ -156,7 +159,7 @@ def validate_endgames_remote(
 def main(
     iterations: int = 10,
     games_per_iteration: int = 1,
-    max_plies: int = 200,
+    max_plies: int | None = None,
     simulations: int = 64,
     train_steps: int = 1,
     batch_size: int = 64,
@@ -173,6 +176,7 @@ def main(
     validation_max_plies: int = 200,
     stockfish_movetime: float = 0.05,
     seed: int | None = None,
+    starting_fen: str | None = None,
     validate_endgames: bool = False,
     endgame_depth: int = 5,
     endgame_steps: int = 800,
@@ -198,7 +202,7 @@ def main(
         train_remote.remote(
             iterations=iterations,
             games_per_iteration=games_per_iteration,
-            max_plies=None if max_plies == 0 else max_plies,
+            max_plies=max_plies,
             simulations=simulations,
             train_steps=train_steps,
             batch_size=batch_size,
@@ -215,5 +219,6 @@ def main(
             validation_max_plies=validation_max_plies,
             stockfish_movetime=stockfish_movetime,
             seed=seed,
+            starting_fen=starting_fen,
         )
     )
