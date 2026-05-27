@@ -51,8 +51,43 @@ uv run modal run src/rl_chess/modal_app.py --episodes 1000 --max-plies 200 --see
 
 The Modal app runs the same `train_self_play` function remotely, so local and remote execution share one core loop.
 
+## Endgame value validation
+
+The endgame value-validation loop is a narrow, deterministic check that the model can learn terminal-backed value targets before we scale self-play. It builds a small dataset from ten KQK forced-mate positions, trains only the value head, and then checks whether a one-ply value-greedy player can convert the positions within the ply cap.
+
+Local smoke:
+
+```bash
+uv run pytest tests/test_core.py::test_endgame_value_validation_can_overfit_tiny_model_smoke -q
+```
+
+Remote Modal validation:
+
+```bash
+uv run modal run src/rl_chess/modal_app.py --validate-endgames --endgame-steps 800 --seed 123
+```
+
 ## Tests
 
 ```bash
 uv run pytest -q
 ```
+
+## Research log
+
+### 2026-05-27 18:02:05 UTC — README and agent research-log convention
+
+- Added `AGENTS.md` with the standing repo instruction that all changes, validation runs, training experiments, and design decisions must be recorded in this research log with date/time, commands, metrics, and artifact paths.
+- Updated README to document the endgame value-validation loop and how to run it locally/remotely.
+
+### 2026-05-27 18:02:05 UTC — Narrow and broad learning validation status
+
+- Narrow validation: added the endgame value-validation loop over ten KQK forced-mate positions. The loop verifies that the model can reduce value MSE on terminal-backed targets and that a value-greedy policy can be evaluated from those learned values.
+- Broad validation: the existing NN-guided PUCT self-play loop, replay buffer, policy/value training path, checkpointing, and weak-Stockfish validation path are covered by the test suite and first-meaningful-run preset.
+- Latest full unit/integration suite before this documentation update: `uv run pytest -q` completed with `24 passed, 1 warning`.
+
+### 2026-05-27 18:03:54 UTC — Documentation update verification
+
+- Command: `uv run pytest -q`
+- Result: passed (`24 passed, 1 warning in 61.67s`).
+- Warning: Modal local-entrypoint smoke warns that local execution does not access mounted remote volume data; expected for the local test path.
