@@ -2,6 +2,7 @@ import chess
 import pytest
 import torch
 
+from rl_chess.endgame_validation import DEFAULT_ENDGAME_FENS, build_value_dataset, run_endgame_value_validation
 from rl_chess.env import ChessEnv, board_to_ascii, result_to_white_reward
 from rl_chess.nn_model import PolicyValueNet, train_batch
 from rl_chess.puct_mcts import PUCTMCTS, PolicyValueEvaluator
@@ -159,6 +160,47 @@ def test_modal_remote_training_entrypoint_can_run_tiny_local_smoke():
     assert summary["games"] == 1
     assert summary["hidden_channels"] == 8
     assert summary["residual_blocks"] == 0
+
+
+def test_endgame_value_dataset_uses_ten_forced_positions():
+    examples = build_value_dataset(DEFAULT_ENDGAME_FENS, depth=5)
+    assert len(DEFAULT_ENDGAME_FENS) == 10
+    assert len(examples) >= 10
+    assert {abs(example.value_target) for example in examples} <= {0.0, 1.0}
+    assert any(example.value_target == 1.0 for example in examples)
+
+
+def test_endgame_value_validation_can_overfit_tiny_model_smoke():
+    summary = run_endgame_value_validation(
+        fens=DEFAULT_ENDGAME_FENS[:2],
+        depth=5,
+        hidden_channels=8,
+        residual_blocks=0,
+        steps=20,
+        learning_rate=0.01,
+        seed=1,
+        max_plies=5,
+        report_every=10,
+    )
+    assert summary["loop"] == "endgame-value-validation"
+    assert summary["positions"] == 2
+    assert summary["after"]["mse"] < summary["before"]["mse"]
+
+
+def test_modal_remote_endgame_validation_entrypoint_can_run_tiny_local_smoke():
+    from rl_chess.modal_app import validate_endgames_remote
+
+    summary = validate_endgames_remote.local(
+        depth=5,
+        hidden_channels=8,
+        residual_blocks=0,
+        steps=2,
+        learning_rate=0.01,
+        seed=1,
+        max_plies=5,
+    )
+    assert summary["loop"] == "endgame-value-validation"
+    assert summary["positions"] == 10
 
 
 def test_training_rejects_invalid_public_knobs():

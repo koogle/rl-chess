@@ -12,7 +12,7 @@ CHECKPOINT_ROOT = Path("/checkpoints")
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("stockfish")
-    .pip_install("python-chess>=1.999", "torch>=2.12.0")
+    .pip_install("python-chess>=1.999", "torch>=2.12.0", "numpy>=2.4.6")
     .add_local_python_source("rl_chess")
 )
 
@@ -127,6 +127,31 @@ def train_remote(
     return summary
 
 
+@app.function(image=image, timeout=60 * 60)
+def validate_endgames_remote(
+    depth: int = 5,
+    hidden_channels: int = 64,
+    residual_blocks: int = 4,
+    steps: int = 400,
+    learning_rate: float = 0.001,
+    seed: int = 1,
+    max_plies: int = 5,
+    batch_size: int = 64,
+) -> dict[str, object]:
+    from rl_chess.endgame_validation import run_endgame_value_validation
+
+    return run_endgame_value_validation(
+        depth=depth,
+        hidden_channels=hidden_channels,
+        residual_blocks=residual_blocks,
+        steps=steps,
+        learning_rate=learning_rate,
+        seed=seed,
+        max_plies=max_plies,
+        batch_size=batch_size,
+    )
+
+
 @app.local_entrypoint()
 def main(
     iterations: int = 10,
@@ -148,7 +173,27 @@ def main(
     validation_max_plies: int = 200,
     stockfish_movetime: float = 0.05,
     seed: int | None = None,
+    validate_endgames: bool = False,
+    endgame_depth: int = 5,
+    endgame_steps: int = 800,
+    endgame_max_plies: int = 5,
+    endgame_batch_size: int = 64,
 ) -> None:
+    if validate_endgames:
+        print(
+            validate_endgames_remote.remote(
+                depth=endgame_depth,
+                hidden_channels=hidden_channels,
+                residual_blocks=residual_blocks,
+                steps=endgame_steps,
+                learning_rate=learning_rate,
+                seed=1 if seed is None else seed,
+                max_plies=endgame_max_plies,
+                batch_size=endgame_batch_size,
+            )
+        )
+        return
+
     print(
         train_remote.remote(
             iterations=iterations,
