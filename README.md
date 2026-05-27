@@ -91,3 +91,14 @@ uv run pytest -q
 - Command: `uv run pytest -q`
 - Result: passed (`24 passed, 1 warning in 61.67s`).
 - Warning: Modal local-entrypoint smoke warns that local execution does not access mounted remote volume data; expected for the local test path.
+
+### 2026-05-27 18:07:00 UTC — First full remote training/validation run
+
+- Command: `uv run modal run src/rl_chess/modal_app.py --first-meaningful-run --seed 123`
+- Modal run: https://modal.com/apps/koogle-frick/main/ap-5c0RM2iYhmle35dMOe3ICn
+- Result: completed successfully as an execution run, but failed the Stockfish validation gate.
+- Training: `iterations=3`, `games=6`, `examples=653`, `terminal_games=2`, `truncated_games=4`, `replay_size=653`.
+- Final losses: total `3.581167`, policy `3.308196`, value `0.272971`.
+- Checkpoints: `/checkpoints/first-meaningful-run/iteration-0001.pt`, `/checkpoints/first-meaningful-run/iteration-0002.pt`, `/checkpoints/first-meaningful-run/iteration-0003.pt`.
+- Stockfish validation: Elo `1320`, `validation_games=4`, `wins=0`, `losses=4`, `draws=0`, `score=0.000`, `validation_passed=False`.
+- Interpretation: the loop runs end-to-end and produces checkpoints, but this first meaningful preset is still too weak to score against Stockfish's supported Elo floor.
