@@ -8,24 +8,154 @@ import chess
 import torch
 import torch.nn.functional as F
 
-from rl_chess.env import board_to_ascii, result_to_white_reward
+from rl_chess.env import ascii_to_board, board_to_ascii, result_to_white_reward
 from rl_chess.nn_model import PolicyValueNet
 from rl_chess.self_play import TrainingExample
 
-DEFAULT_ENDGAME_FENS = [
+
+@dataclass(frozen=True)
+class EndgamePosition:
+    board_ascii: str
+    turn: bool
+
+    def board(self) -> chess.Board:
+        return ascii_to_board(self.board_ascii, self.turn)
+
+
+DEFAULT_ENDGAME_POSITIONS = [
     # Ten KQK positions where White is not mating in one, but can force mate
     # within five plies. They keep validation focused on value propagation from
     # terminal results rather than opening theory or Stockfish imitation.
-    "8/8/8/8/8/7k/2Q5/4K3 w - - 0 1",
-    "8/8/8/8/QK6/8/8/2k5 w - - 0 1",
-    "8/8/3K4/8/k7/7Q/8/8 w - - 0 1",
-    "6k1/8/6K1/8/8/8/5Q2/8 w - - 0 1",
-    "8/8/6Q1/8/3K4/8/8/3k4 w - - 0 1",
-    "8/1QK5/8/8/k7/8/8/8 w - - 0 1",
-    "8/8/8/8/8/5K2/6Q1/7k w - - 0 1",
-    "8/8/8/8/4Q3/5K2/8/6k1 w - - 0 1",
-    "5k2/8/3K4/8/8/6Q1/8/8 w - - 0 1",
-    "8/8/8/8/5K2/7Q/8/4k3 w - - 0 1",
+    EndgamePosition(
+        """  a b c d e f g h
+8 . . . . . . . . 8
+7 . . . . . . . . 7
+6 . . . . . . . . 6
+5 . . . . . . . . 5
+4 . . . . . . . . 4
+3 . . . . . . . ♚ 3
+2 . . ♕ . . . . . 2
+1 . . . . ♔ . . . 1
+  a b c d e f g h""",
+        chess.WHITE,
+    ),
+    EndgamePosition(
+        """  a b c d e f g h
+8 . . . . . . . . 8
+7 . . . . . . . . 7
+6 . . . . . . . . 6
+5 . . . . . . . . 5
+4 ♕ ♔ . . . . . . 4
+3 . . . . . . . . 3
+2 . . . . . . . . 2
+1 . . ♚ . . . . . 1
+  a b c d e f g h""",
+        chess.WHITE,
+    ),
+    EndgamePosition(
+        """  a b c d e f g h
+8 . . . . . . . . 8
+7 . . . . . . . . 7
+6 . . . ♔ . . . . 6
+5 . . . . . . . . 5
+4 ♚ . . . . . . . 4
+3 . . . . . . . ♕ 3
+2 . . . . . . . . 2
+1 . . . . . . . . 1
+  a b c d e f g h""",
+        chess.WHITE,
+    ),
+    EndgamePosition(
+        """  a b c d e f g h
+8 . . . . . . ♚ . 8
+7 . . . . . . . . 7
+6 . . . . . . ♔ . 6
+5 . . . . . . . . 5
+4 . . . . . . . . 4
+3 . . . . . . . . 3
+2 . . . . . ♕ . . 2
+1 . . . . . . . . 1
+  a b c d e f g h""",
+        chess.WHITE,
+    ),
+    EndgamePosition(
+        """  a b c d e f g h
+8 . . . . . . . . 8
+7 . . . . . . . . 7
+6 . . . . . . ♕ . 6
+5 . . . . . . . . 5
+4 . . . ♔ . . . . 4
+3 . . . . . . . . 3
+2 . . . . . . . . 2
+1 . . . ♚ . . . . 1
+  a b c d e f g h""",
+        chess.WHITE,
+    ),
+    EndgamePosition(
+        """  a b c d e f g h
+8 . . . . . . . . 8
+7 . ♕ ♔ . . . . . 7
+6 . . . . . . . . 6
+5 . . . . . . . . 5
+4 ♚ . . . . . . . 4
+3 . . . . . . . . 3
+2 . . . . . . . . 2
+1 . . . . . . . . 1
+  a b c d e f g h""",
+        chess.WHITE,
+    ),
+    EndgamePosition(
+        """  a b c d e f g h
+8 . . . . . . . . 8
+7 . . . . . . . . 7
+6 . . . . . . . . 6
+5 . . . . . . . . 5
+4 . . . . . . . . 4
+3 . . . . . ♔ . . 3
+2 . . . . . . ♕ . 2
+1 . . . . . . . ♚ 1
+  a b c d e f g h""",
+        chess.WHITE,
+    ),
+    EndgamePosition(
+        """  a b c d e f g h
+8 . . . . . . . . 8
+7 . . . . . . . . 7
+6 . . . . . . . . 6
+5 . . . . . . . . 5
+4 . . . . ♕ . . . 4
+3 . . . . . ♔ . . 3
+2 . . . . . . . . 2
+1 . . . . . . ♚ . 1
+  a b c d e f g h""",
+        chess.WHITE,
+    ),
+    EndgamePosition(
+        """  a b c d e f g h
+8 . . . . . ♚ . . 8
+7 . . . . . . . . 7
+6 . . . ♔ . . . . 6
+5 . . . . . . . . 5
+4 . . . . . . . . 4
+3 . . . . . . ♕ . 3
+2 . . . . . . . . 2
+1 . . . . . . . . 1
+  a b c d e f g h""",
+        chess.WHITE,
+    ),
+    EndgamePosition(
+        """  a b c d e f g h
+8 . . . . . . . . 8
+7 . . . . . . . . 7
+6 . . . . . . . . 6
+5 . . . . . . . . 5
+4 . . . . . ♔ . . 4
+3 . . . . . . . ♕ 3
+2 . . . . . . . . 2
+1 . . . . ♚ . . . 1
+  a b c d e f g h""",
+        chess.WHITE,
+    ),
 ]
 
 
@@ -35,9 +165,13 @@ class ValueExample:
     target: float
 
 
-def forced_white_value(board: chess.Board, depth: int, cache: dict[tuple[str, int], float] | None = None) -> float:
+def board_state_key(board: chess.Board) -> tuple[str, bool]:
+    return (board_to_ascii(board), board.turn)
+
+
+def forced_white_value(board: chess.Board, depth: int, cache: dict[tuple[tuple[str, bool], int], float] | None = None) -> float:
     cache = {} if cache is None else cache
-    key = (board.fen(), depth)
+    key = (board_state_key(board), depth)
     if key in cache:
         return cache[key]
     if board.is_game_over(claim_draw=True):
@@ -64,15 +198,15 @@ def collect_principal_value_line(start: chess.Board, depth: int) -> list[ValueEx
     """
 
     board = start.copy(stack=False)
-    line: dict[str, ValueExample] = {}
-    cache: dict[tuple[str, int], float] = {}
+    line: dict[tuple[str, bool], ValueExample] = {}
+    cache: dict[tuple[tuple[str, bool], int], float] = {}
     for remaining_depth in range(depth, -1, -1):
         if board.is_game_over(claim_draw=True):
             break
         value = forced_white_value(board, remaining_depth, cache)
         if value == 0.0:
             break
-        line[board.fen()] = ValueExample(board.copy(stack=False), value)
+        line[board_state_key(board)] = ValueExample(board.copy(stack=False), value)
         if remaining_depth == 0:
             break
         scored_children: list[tuple[float, chess.Move, chess.Board]] = []
@@ -81,27 +215,27 @@ def collect_principal_value_line(start: chess.Board, depth: int) -> list[ValueEx
             child.push(move)
             child_value = forced_white_value(child, remaining_depth - 1, cache)
             if child.legal_moves.count() > 0:
-                line[child.fen()] = ValueExample(child.copy(stack=False), child_value)
+                line[board_state_key(child)] = ValueExample(child.copy(stack=False), child_value)
             scored_children.append((child_value, move, child))
         best = max(scored_children, key=lambda item: item[0]) if board.turn == chess.WHITE else min(scored_children, key=lambda item: item[0])
         board = best[2]
     return list(line.values())
 
 
-def build_value_dataset(fens: list[str], depth: int) -> list[TrainingExample]:
-    by_fen: dict[str, TrainingExample] = {}
-    for fen in fens:
-        for item in collect_principal_value_line(chess.Board(fen), depth):
+def build_value_dataset(positions: list[EndgamePosition], depth: int) -> list[TrainingExample]:
+    by_position: dict[tuple[str, bool], TrainingExample] = {}
+    for position in positions:
+        for item in collect_principal_value_line(position.board(), depth):
             board = item.board
             legal_moves = tuple(move.uci() for move in board.legal_moves)
             actor_value = item.target if board.turn == chess.WHITE else -item.target
-            by_fen[board.fen()] = TrainingExample(
+            by_position[board_state_key(board)] = TrainingExample(
                 state_ascii=board_to_ascii(board),
                 turn=board.turn,
                 policy_target={move: 1.0 for move in legal_moves},
                 value_target=actor_value,
             )
-    return list(by_fen.values())
+    return list(by_position.values())
 
 
 def train_value_batch(model: PolicyValueNet, optimizer: torch.optim.Optimizer, examples: list[TrainingExample]) -> float:
@@ -153,8 +287,8 @@ def value_greedy_move(model: PolicyValueNet, board: chess.Board) -> chess.Move:
     return max(scored, key=lambda item: (item[0], item[1]))[2]
 
 
-def play_value_greedy(model: PolicyValueNet, fen: str, max_plies: int) -> dict[str, Any]:
-    board = chess.Board(fen)
+def play_value_greedy(model: PolicyValueNet, position: EndgamePosition, max_plies: int) -> dict[str, Any]:
+    board = position.board()
     root_turn = board.turn
     moves: list[str] = []
     for _ in range(max_plies):
@@ -169,20 +303,21 @@ def play_value_greedy(model: PolicyValueNet, fen: str, max_plies: int) -> dict[s
         white_reward = result_to_white_reward(result)
         root_score = white_reward if root_turn == chess.WHITE else -white_reward
     return {
-        "fen": fen,
+        "start_board_ascii": position.board_ascii,
+        "start_turn": "white" if position.turn == chess.WHITE else "black",
         "moves": moves,
         "plies": len(moves),
         "result": result,
         "terminal": result is not None,
         "root_score": root_score,
         "won": root_score == 1.0,
-        "final_fen": board.fen(),
         "final_board_ascii": board_to_ascii(board),
+        "final_turn": "white" if board.turn == chess.WHITE else "black",
     }
 
 
 def run_endgame_value_validation(
-    fens: list[str] | None = None,
+    positions: list[EndgamePosition] | None = None,
     depth: int = 5,
     hidden_channels: int = 64,
     residual_blocks: int = 4,
@@ -193,10 +328,10 @@ def run_endgame_value_validation(
     report_every: int = 50,
     batch_size: int = 64,
 ) -> dict[str, Any]:
-    fens = DEFAULT_ENDGAME_FENS if fens is None else fens
+    positions = DEFAULT_ENDGAME_POSITIONS if positions is None else positions
     random.seed(seed)
     torch.manual_seed(seed)
-    examples = build_value_dataset(fens, depth)
+    examples = build_value_dataset(positions, depth)
     if not examples:
         raise ValueError("no value examples produced")
 
@@ -210,11 +345,11 @@ def run_endgame_value_validation(
         if step == 0 or (step + 1) % report_every == 0 or step + 1 == steps:
             loss_curve.append({"step": step + 1, "value_mse": evaluate_values(model, examples)["mse"]})
     after = evaluate_values(model, examples)
-    games = [play_value_greedy(model, fen, max_plies=max_plies) for fen in fens]
+    games = [play_value_greedy(model, position, max_plies=max_plies) for position in positions]
     wins = sum(1 for game in games if game["won"])
     return {
         "loop": "endgame-value-validation",
-        "positions": len(fens),
+        "positions": len(positions),
         "examples": len(examples),
         "depth": depth,
         "model": {"hidden_channels": hidden_channels, "residual_blocks": residual_blocks},
@@ -222,6 +357,6 @@ def run_endgame_value_validation(
         "before": before,
         "after": after,
         "loss_curve": loss_curve,
-        "validation": {"wins": wins, "positions": len(fens), "passed": wins == len(fens)},
+        "validation": {"wins": wins, "positions": len(positions), "passed": wins == len(positions)},
         "games": games,
     }

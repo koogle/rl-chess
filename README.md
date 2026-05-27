@@ -28,8 +28,7 @@ See `docs/alphago-from-scratch-lessons.md` for the Dwarkesh/Eric Jang AlphaGo-fr
 Smoke run:
 
 ```bash
-uv run rl-chess --iterations 1 --max-plies 1 --mcts-iterations 2 \
-  --starting-fen "8/8/8/8/8/8/8/K1kQ4 b - - 0 1" --seed 123
+uv run rl-chess --iterations 1 --max-plies 1 --mcts-iterations 2 --seed 123
 ```
 
 `--max-plies` is a safety cap, not a training truncation mechanism. If a game reaches the cap while non-terminal, the run raises instead of converting the unfinished game into a draw target. Omit the flag, or pass `0`, for uncapped self-play that runs until `python-chess` reports a terminal result.
@@ -111,10 +110,22 @@ uv run pytest -q
 - Correction: reverted the mistaken side-to-move input-plane removal. The model again receives the side-to-move plane.
 - Change: removed truncation from self-play/training metrics and checkpoint summaries. Self-play now either reaches a terminal `python-chess` result or raises if an optional safety `max_plies` cap is hit while non-terminal.
 - Change: first-meaningful training preset now uses uncapped self-play (`max_plies=None`). CLI/Modal `--max-plies` remains only as a safety cap; `0`/omitted means no cap.
-- Change: added optional `--starting-fen` / `starting_fen` support for deterministic smoke tests without relying on artificial truncation.
+- Change: added temporary `--starting-fen` / `starting_fen` support for deterministic smoke tests without relying on artificial truncation. This was later removed because diagnostic positions should use ASCII board diagrams.
 - TDD red command: `uv run pytest tests/test_core.py::test_self_play_rejects_safety_cap_instead_of_truncating_game tests/test_core.py::test_training_metrics_do_not_report_truncation tests/test_core.py::test_first_meaningful_run_is_bigger_than_smoke_but_bounded -q`
 - Red result: failed as expected because capped non-terminal self-play still returned a truncated game, `train()` did not accept `starting_board`, and `FIRST_MEANINGFUL_RUN.max_plies` was still `120`.
 - Targeted green command: `uv run pytest tests/test_core.py::test_self_play_rejects_safety_cap_instead_of_truncating_game tests/test_core.py::test_training_metrics_do_not_report_truncation tests/test_core.py::test_first_meaningful_run_is_bigger_than_smoke_but_bounded tests/test_core.py::test_cli_smoke tests/test_core.py::test_modal_remote_training_entrypoint_can_run_tiny_local_smoke -q`
 - Targeted green result: passed (`5 passed, 1 warning in 2.64s`).
 - Full verification command: `uv run pytest -q`
 - Full verification result: passed (`25 passed, 1 warning in 61.70s`).
+
+### 2026-05-27 18:40:45 UTC — Replaced diagnostic FEN plumbing with ASCII boards
+
+- Correction: removed the public `--starting-fen` CLI flag, Modal `starting_fen` parameter, and endgame fixture FEN strings. Diagnostic starting positions now use `board_to_ascii()` diagrams plus an explicit side-to-move.
+- Change: added `ascii_to_board()` as the inverse of the inspectable Unicode board format so tests/diagnostics can still construct exact `python-chess.Board` states without exposing FEN at public or RL-facing boundaries.
+- Change: endgame validation fixtures are now `EndgamePosition(board_ascii, turn)` values, and validation game reports include starting/final ASCII boards rather than FEN fields.
+- TDD red command: `uv run pytest tests/test_core.py::test_ascii_board_parser_reconstructs_python_chess_position tests/test_core.py::test_public_cli_uses_ascii_starting_board_not_fen tests/test_core.py::test_public_cli_rejects_old_starting_fen_flag -q`
+- Red result: failed as expected because `DEFAULT_ENDGAME_POSITIONS` and `ascii_to_board()` did not exist and the old FEN-based CLI flag was still present.
+- Targeted green command: `uv run pytest tests/test_core.py::test_ascii_board_parser_reconstructs_python_chess_position tests/test_core.py::test_public_cli_uses_ascii_starting_board_not_fen tests/test_core.py::test_public_cli_rejects_old_starting_fen_flag -q`
+- Targeted green result: passed (`3 passed in 1.27s`).
+- Full verification command: `uv run pytest -q`
+- Full verification result: passed (`28 passed, 1 warning in 63.07s`).

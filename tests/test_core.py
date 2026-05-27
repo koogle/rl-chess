@@ -2,8 +2,8 @@ import chess
 import pytest
 import torch
 
-from rl_chess.endgame_validation import DEFAULT_ENDGAME_FENS, build_value_dataset, run_endgame_value_validation
-from rl_chess.env import ChessEnv, board_to_ascii, result_to_white_reward
+from rl_chess.endgame_validation import DEFAULT_ENDGAME_POSITIONS, build_value_dataset, run_endgame_value_validation
+from rl_chess.env import ChessEnv, ascii_to_board, board_to_ascii, result_to_white_reward
 from rl_chess.nn_model import PolicyValueNet, train_batch
 from rl_chess.puct_mcts import PUCTMCTS, PolicyValueEvaluator
 from rl_chess.self_play import TrainingExample, play_self_game, sample_policy
@@ -17,6 +17,29 @@ from rl_chess.validation import (
     stockfish_strength_config,
     play_validation_game,
 )
+
+KQK_BLACK_TO_MOVE = """  a b c d e f g h
+8 . . . . . . . . 8
+7 . . . . . . . . 7
+6 . . . . . . . . 6
+5 . . . . . . . . 5
+4 . . . . . . . . 4
+3 . . . . . . . . 3
+2 . . . . . . . . 2
+1 ♔ . ♚ ♕ . . . . 1
+  a b c d e f g h"""
+
+MATE_IN_ONE = """  a b c d e f g h
+8 . . . . . . . ♚ 8
+7 . . . . . . . ♕ 7
+6 . . . . . . ♔ . 6
+5 . . . . . . . . 5
+4 . . . . . . . . 4
+3 . . . . . . . . 3
+2 . . . . . . . . 2
+1 . . . . . . . . 1
+  a b c d e f g h"""
+
 
 
 class E4Evaluator(PolicyValueEvaluator):
@@ -50,6 +73,43 @@ def test_board_encoder_preserves_visual_state_and_side_to_move():
 def test_puct_uses_priors_for_visit_policy():
     policy = PUCTMCTS(E4Evaluator(), iterations=16, seed=1).search_policy(chess.Board())
     assert policy["e2e4"] == max(policy.values())
+
+
+def test_ascii_board_parser_reconstructs_python_chess_position():
+    board = ascii_to_board(KQK_BLACK_TO_MOVE, turn=chess.BLACK)
+    assert board.turn == chess.BLACK
+    assert board_to_ascii(board) == KQK_BLACK_TO_MOVE
+    assert {move.uci() for move in board.legal_moves} == {"c1d1"}
+
+
+def test_public_cli_uses_ascii_starting_board_not_fen(monkeypatch, tmp_path, capsys):
+    from rl_chess import cli
+    from rl_chess.train import TrainMetrics
+
+    board_file = tmp_path / "start-board.txt"
+    board_file.write_text(KQK_BLACK_TO_MOVE, encoding="utf-8")
+    observed = {}
+
+    def fake_train(**kwargs):
+        observed.update(kwargs)
+        return TrainMetrics(iterations=1, games=1, examples=0, terminal_games=0, replay_size=0)
+
+    monkeypatch.setattr(cli, "train", fake_train)
+    exit_code = cli.main(["--iterations", "1", "--starting-board", str(board_file), "--starting-turn", "black"])
+
+    assert exit_code == 0
+    assert board_to_ascii(observed["starting_board"]) == KQK_BLACK_TO_MOVE
+    assert observed["starting_board"].turn == chess.BLACK
+    assert "loop=nn-puct" in capsys.readouterr().out
+
+
+def test_public_cli_rejects_old_starting_fen_flag(capsys):
+    from rl_chess import cli
+
+    with pytest.raises(SystemExit):
+        cli.main(["--starting-fen", "unused"])
+    captured = capsys.readouterr()
+    assert "unrecognized arguments: --starting-fen" in captured.err
 
 
 def test_policy_value_trainer_reduces_loss_on_repeated_target():
@@ -87,7 +147,7 @@ def test_model_uses_a_deeper_residual_tower():
 
 
 def test_self_play_can_be_uncapped_until_terminal_from_mate_in_one():
-    board = chess.Board("7k/7Q/6K1/8/8/8/8/8 w - - 0 1")
+    board = ascii_to_board(MATE_IN_ONE, turn=chess.WHITE)
     env = ChessEnv(starting_board=board)
     # Direct env proof: no environment turn cap exists.
     _obs, reward, done, info = env.step("h7g7")
@@ -101,7 +161,7 @@ def test_self_play_rejects_safety_cap_instead_of_truncating_game():
 
 
 def test_training_metrics_do_not_report_truncation():
-    starting_board = chess.Board("8/8/8/8/8/8/8/K1kQ4 b - - 0 1")
+    starting_board = ascii_to_board(KQK_BLACK_TO_MOVE, turn=chess.BLACK)
     metrics = train(
         model=PolicyValueNet(hidden_channels=8),
         iterations=2,
@@ -128,7 +188,7 @@ def test_training_writes_iteration_checkpoints(tmp_path):
         simulations=2,
         max_plies=1,
         train_steps=1,
-        starting_board=chess.Board("8/8/8/8/8/8/8/K1kQ4 b - - 0 1"),
+        starting_board=ascii_to_board(KQK_BLACK_TO_MOVE, turn=chess.BLACK),
         seed=3,
         checkpoint_dir=tmp_path,
     )
@@ -163,7 +223,8 @@ def test_modal_remote_training_entrypoint_can_run_tiny_local_smoke():
         batch_size=1,
         hidden_channels=8,
         residual_blocks=0,
-        starting_fen="8/8/8/8/8/8/8/K1kQ4 b - - 0 1",
+        starting_board_ascii=KQK_BLACK_TO_MOVE,
+        starting_turn="black",
         seed=1,
     )
     assert summary["loop"] == "nn-puct"
@@ -173,8 +234,8 @@ def test_modal_remote_training_entrypoint_can_run_tiny_local_smoke():
 
 
 def test_endgame_value_dataset_uses_ten_forced_positions():
-    examples = build_value_dataset(DEFAULT_ENDGAME_FENS, depth=5)
-    assert len(DEFAULT_ENDGAME_FENS) == 10
+    examples = build_value_dataset(DEFAULT_ENDGAME_POSITIONS, depth=5)
+    assert len(DEFAULT_ENDGAME_POSITIONS) == 10
     assert len(examples) >= 10
     assert {abs(example.value_target) for example in examples} <= {0.0, 1.0}
     assert any(example.value_target == 1.0 for example in examples)
@@ -182,7 +243,7 @@ def test_endgame_value_dataset_uses_ten_forced_positions():
 
 def test_endgame_value_validation_can_overfit_tiny_model_smoke():
     summary = run_endgame_value_validation(
-        fens=DEFAULT_ENDGAME_FENS[:2],
+        positions=DEFAULT_ENDGAME_POSITIONS[:2],
         depth=5,
         hidden_channels=8,
         residual_blocks=0,
@@ -268,7 +329,7 @@ def test_stockfish_supported_elo_floor_uses_uci_limit_strength():
 
 
 def test_validation_game_scores_candidate_result_from_candidate_perspective():
-    board = chess.Board("7k/7Q/6K1/8/8/8/8/8 w - - 0 1")
+    board = ascii_to_board(MATE_IN_ONE, turn=chess.WHITE)
     result = play_validation_game(
         candidate=FixedMovePlayer(["h7g7"]),
         baseline=FirstLegalPlayer(),
@@ -281,7 +342,7 @@ def test_validation_game_scores_candidate_result_from_candidate_perspective():
 
 
 def test_validation_game_can_score_candidate_loss_as_black():
-    board = chess.Board("7k/7Q/6K1/8/8/8/8/8 w - - 0 1")
+    board = ascii_to_board(MATE_IN_ONE, turn=chess.WHITE)
     result = play_validation_game(
         candidate=FirstLegalPlayer(),
         baseline=FixedMovePlayer(["h7g7"]),
@@ -311,8 +372,10 @@ def test_cli_can_run_stockfish_validation_with_injected_runner(monkeypatch, caps
         "2",
         "--hidden-channels",
         "8",
-        "--starting-fen",
-        "8/8/8/8/8/8/8/K1kQ4 b - - 0 1",
+        "--starting-board-inline",
+        KQK_BLACK_TO_MOVE,
+        "--starting-turn",
+        "black",
         "--validate-stockfish",
         "--validation-games",
         "1",
@@ -370,8 +433,10 @@ def test_cli_smoke(capsys):
         "2",
         "--hidden-channels",
         "8",
-        "--starting-fen",
-        "8/8/8/8/8/8/8/K1kQ4 b - - 0 1",
+        "--starting-board-inline",
+        KQK_BLACK_TO_MOVE,
+        "--starting-turn",
+        "black",
         "--seed",
         "1",
     ])

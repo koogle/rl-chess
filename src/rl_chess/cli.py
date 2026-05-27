@@ -3,8 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import chess
-
+from rl_chess.env import ascii_to_board
 from rl_chess.nn_model import PolicyValueNet
 from rl_chess.run_presets import FIRST_MEANINGFUL_RUN
 from rl_chess.train import load_checkpoint_model, train
@@ -26,7 +25,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Optional safety cap; 0 means no cap. Reaching it raises instead of truncating.",
     )
-    parser.add_argument("--starting-fen", default=None, help="Optional starting FEN for diagnostics and smoke tests.")
+    parser.add_argument("--starting-board", type=Path, default=None, help="Path to a board_to_ascii() diagram for diagnostics and smoke tests.")
+    parser.add_argument("--starting-board-inline", default=None, help="Inline board_to_ascii() diagram for diagnostics and smoke tests.")
+    parser.add_argument("--starting-turn", choices=("white", "black"), default="white", help="Side to move for --starting-board/--starting-board-inline.")
     parser.add_argument("--mcts-iterations", "--simulations", dest="simulations", type=int, default=64)
     parser.add_argument("--train-steps", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=64)
@@ -50,6 +51,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--validation-games", type=int, default=2, help="Validation games, alternating colors.")
     parser.add_argument("--validation-max-plies", type=int, default=200, help="Validation ply cap; capped games count as draws.")
     return parser
+
+
+def starting_board_from_args(args: argparse.Namespace):
+    if args.starting_board is not None and args.starting_board_inline is not None:
+        raise ValueError("use only one of --starting-board or --starting-board-inline")
+    board_ascii = None
+    if args.starting_board is not None:
+        board_ascii = args.starting_board.read_text(encoding="utf-8")
+    elif args.starting_board_inline is not None:
+        board_ascii = args.starting_board_inline
+    if board_ascii is None:
+        return None
+    return ascii_to_board(board_ascii, turn=args.starting_turn == "white")
 
 
 def apply_first_run_preset(args: argparse.Namespace) -> None:
@@ -94,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
         temperature=args.temperature,
         seed=args.seed,
         checkpoint_dir=args.checkpoint_dir,
-        starting_board=None if args.starting_fen is None else chess.Board(args.starting_fen),
+        starting_board=starting_board_from_args(args),
     )
     summary = [
         "loop=nn-puct",

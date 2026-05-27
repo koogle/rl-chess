@@ -53,10 +53,10 @@ def train_remote(
     validation_max_plies: int = 200,
     stockfish_movetime: float = 0.05,
     seed: int | None = None,
-    starting_fen: str | None = None,
+    starting_board_ascii: str | None = None,
+    starting_turn: str = "white",
 ) -> dict[str, object]:
-    import chess
-
+    from rl_chess.env import ascii_to_board
     from rl_chess.nn_model import PolicyValueNet
     from rl_chess.run_presets import FIRST_MEANINGFUL_RUN
     from rl_chess.train import train
@@ -94,7 +94,7 @@ def train_remote(
         temperature=temperature,
         seed=seed,
         checkpoint_dir=checkpoint_dir,
-        starting_board=None if starting_fen is None else chess.Board(starting_fen),
+        starting_board=None if starting_board_ascii is None else ascii_to_board(starting_board_ascii, starting_turn == "white"),
     )
     summary = _jsonable_metrics(metrics)
     summary.update(
@@ -176,7 +176,8 @@ def main(
     validation_max_plies: int = 200,
     stockfish_movetime: float = 0.05,
     seed: int | None = None,
-    starting_fen: str | None = None,
+    starting_board_ascii: str | None = None,
+    starting_turn: str = "white",
     validate_endgames: bool = False,
     endgame_depth: int = 5,
     endgame_steps: int = 800,
@@ -219,6 +220,7 @@ def main(
             validation_max_plies=validation_max_plies,
             stockfish_movetime=stockfish_movetime,
             seed=seed,
-            starting_fen=starting_fen,
+            starting_board_ascii=starting_board_ascii,
+            starting_turn=starting_turn,
         )
     )
