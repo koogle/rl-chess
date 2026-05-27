@@ -66,7 +66,7 @@ class PolicyValueNet(nn.Module):
         self.hidden_channels = hidden_channels
         self.residual_blocks = residual_blocks
         self.trunk = nn.Sequential(
-            nn.Conv2d(12, hidden_channels, 3, padding=1),
+            nn.Conv2d(13, hidden_channels, 3, padding=1),
             nn.ReLU(),
             *(ResidualBlock(hidden_channels) for _ in range(residual_blocks)),
         )
@@ -101,7 +101,7 @@ class PolicyValueNet(nn.Module):
             return {}, 0.0
 
         device = next(self.parameters()).device
-        state = self.encode_board_ascii(board_to_ascii(board)).unsqueeze(0).to(device)
+        state = self.encode_board_ascii(board_to_ascii(board), board.turn).unsqueeze(0).to(device)
         logits, values = self(state)
         indices = torch.tensor([self.action_index(move) for move in legal_moves], dtype=torch.long, device=device)
         probs = torch.softmax(logits[0, indices], dim=0)
@@ -112,10 +112,10 @@ class PolicyValueNet(nn.Module):
         return {move: float(prob) for move, prob in zip(legal_moves, probs)}, white_value
 
     @staticmethod
-    def encode_board_ascii(board_ascii: str) -> torch.Tensor:
-        """Encode the project's visual Unicode board as 12 piece planes."""
+    def encode_board_ascii(board_ascii: str, turn: bool) -> torch.Tensor:
+        """Encode the project's visual Unicode board: 12 piece planes + side to move."""
 
-        tensor = torch.zeros((12, 8, 8), dtype=torch.float32)
+        tensor = torch.zeros((13, 8, 8), dtype=torch.float32)
         rank_lines = [line for line in board_ascii.splitlines() if line and line[0] in "12345678"]
         if len(rank_lines) != 8:
             raise ValueError("board_ascii must contain 8 rank lines")
@@ -128,6 +128,8 @@ class PolicyValueNet(nn.Module):
                 if symbol != ".":
                     tensor[PIECE_TO_PLANE[symbol], row, col] = 1.0
 
+        if turn == chess.WHITE:
+            tensor[12].fill_(1.0)
         return tensor
 
     @staticmethod
@@ -165,7 +167,7 @@ def train_batch(
 
     model.train()
     device = next(model.parameters()).device
-    states = torch.stack([model.encode_board_ascii(ex.state_ascii) for ex in examples]).to(device)
+    states = torch.stack([model.encode_board_ascii(ex.state_ascii, ex.turn) for ex in examples]).to(device)
     logits, values = model(states)
     policy_loss = model.policy_loss(logits, examples)
     value_targets = torch.tensor([ex.value_target for ex in examples], dtype=torch.float32, device=device)
