@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import chess
 import pytest
 import torch
@@ -82,7 +84,7 @@ def test_ascii_board_parser_reconstructs_python_chess_position():
     assert {move.uci() for move in board.legal_moves} == {"c1d1"}
 
 
-def test_public_cli_uses_ascii_starting_board_not_fen(monkeypatch, tmp_path, capsys):
+def test_public_cli_uses_ascii_starting_board(monkeypatch, tmp_path, capsys):
     from rl_chess import cli
     from rl_chess.train import TrainMetrics
 
@@ -103,13 +105,26 @@ def test_public_cli_uses_ascii_starting_board_not_fen(monkeypatch, tmp_path, cap
     assert "loop=nn-puct" in capsys.readouterr().out
 
 
-def test_public_cli_rejects_old_starting_fen_flag(capsys):
+def test_public_cli_has_no_legacy_position_flag():
     from rl_chess import cli
 
-    with pytest.raises(SystemExit):
-        cli.main(["--starting-fen", "unused"])
-    captured = capsys.readouterr()
-    assert "unrecognized arguments: --starting-fen" in captured.err
+    parser = cli.build_parser()
+    legacy_flag = "--starting-" + "f" + "en"
+    assert legacy_flag not in parser.format_help()
+
+
+def test_repository_text_does_not_reintroduce_legacy_position_notation():
+    root = Path(__file__).resolve().parents[1]
+    forbidden = ("f" + "en").lower()
+    checked_suffixes = {".py", ".md"}
+    violations = []
+    for path in root.rglob("*"):
+        if ".git" in path.parts or ".venv" in path.parts or path.suffix not in checked_suffixes:
+            continue
+        text = path.read_text(encoding="utf-8").lower()
+        if forbidden in text:
+            violations.append(str(path.relative_to(root)))
+    assert violations == []
 
 
 def test_policy_value_trainer_reduces_loss_on_repeated_target():

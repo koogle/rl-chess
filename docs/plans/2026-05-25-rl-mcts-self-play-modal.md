@@ -4,7 +4,7 @@
 
 **Goal:** Build an inspectable AlphaGo-style chess loop: self-play uses MCTS to improve each move, then training distills those search-improved targets.
 
-**Architecture:** `python-chess` remains the rule engine. The RL-facing state is the Unicode board diagram (`board_ascii`), not FEN. Local training is the source of truth; Modal is only a remote runner for the same code.
+**Architecture:** `python-chess` remains the rule engine. The RL-facing state is the Unicode board diagram (`board_ascii`), not compact chess notation. Local training is the source of truth; Modal is only a remote runner for the same code.
 
 **Tech Stack:** Python, uv, python-chess, pytest, Modal, hand-written MCTS/RL loops.
 

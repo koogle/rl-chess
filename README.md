@@ -19,7 +19,7 @@ The AlphaGo lesson for this project is concise:
 
 > Search improves the model; the model improves search.
 
-We keep the board inspectable with Unicode chess diagrams instead of exposing FEN to the RL loop. The next milestone is MCTS self-play training: run search at each board, store the visit-count policy as a better per-move target, then train a small policy/value learner from those examples. Local training remains the source of truth; Modal only scales the same loop remotely.
+We keep the board inspectable with Unicode chess diagrams instead of exposing compact chess notation to the RL loop. The next milestone is MCTS self-play training: run search at each board, store the visit-count policy as a better per-move target, then train a small policy/value learner from those examples. Local training remains the source of truth; Modal only scales the same loop remotely.
 
 See `docs/alphago-from-scratch-lessons.md` for the Dwarkesh/Eric Jang AlphaGo-from-scratch notes, and `docs/plans/2026-05-25-rl-mcts-self-play-modal.md` for the implementation plan.
 
@@ -110,7 +110,7 @@ uv run pytest -q
 - Correction: reverted the mistaken side-to-move input-plane removal. The model again receives the side-to-move plane.
 - Change: removed truncation from self-play/training metrics and checkpoint summaries. Self-play now either reaches a terminal `python-chess` result or raises if an optional safety `max_plies` cap is hit while non-terminal.
 - Change: first-meaningful training preset now uses uncapped self-play (`max_plies=None`). CLI/Modal `--max-plies` remains only as a safety cap; `0`/omitted means no cap.
-- Change: added temporary `--starting-fen` / `starting_fen` support for deterministic smoke tests without relying on artificial truncation. This was later removed because diagnostic positions should use ASCII board diagrams.
+- Change: added temporary compact-notation starting-position support for deterministic smoke tests without relying on artificial truncation. This was later removed because diagnostic positions should use ASCII board diagrams.
 - TDD red command: `uv run pytest tests/test_core.py::test_self_play_rejects_safety_cap_instead_of_truncating_game tests/test_core.py::test_training_metrics_do_not_report_truncation tests/test_core.py::test_first_meaningful_run_is_bigger_than_smoke_but_bounded -q`
 - Red result: failed as expected because capped non-terminal self-play still returned a truncated game, `train()` did not accept `starting_board`, and `FIRST_MEANINGFUL_RUN.max_plies` was still `120`.
 - Targeted green command: `uv run pytest tests/test_core.py::test_self_play_rejects_safety_cap_instead_of_truncating_game tests/test_core.py::test_training_metrics_do_not_report_truncation tests/test_core.py::test_first_meaningful_run_is_bigger_than_smoke_but_bounded tests/test_core.py::test_cli_smoke tests/test_core.py::test_modal_remote_training_entrypoint_can_run_tiny_local_smoke -q`
@@ -118,14 +118,25 @@ uv run pytest -q
 - Full verification command: `uv run pytest -q`
 - Full verification result: passed (`25 passed, 1 warning in 61.70s`).
 
-### 2026-05-27 18:40:45 UTC — Replaced diagnostic FEN plumbing with ASCII boards
+### 2026-05-27 18:40:45 UTC — Replaced diagnostic compact chess notation plumbing with ASCII boards
 
-- Correction: removed the public `--starting-fen` CLI flag, Modal `starting_fen` parameter, and endgame fixture FEN strings. Diagnostic starting positions now use `board_to_ascii()` diagrams plus an explicit side-to-move.
-- Change: added `ascii_to_board()` as the inverse of the inspectable Unicode board format so tests/diagnostics can still construct exact `python-chess.Board` states without exposing FEN at public or RL-facing boundaries.
-- Change: endgame validation fixtures are now `EndgamePosition(board_ascii, turn)` values, and validation game reports include starting/final ASCII boards rather than FEN fields.
-- TDD red command: `uv run pytest tests/test_core.py::test_ascii_board_parser_reconstructs_python_chess_position tests/test_core.py::test_public_cli_uses_ascii_starting_board_not_fen tests/test_core.py::test_public_cli_rejects_old_starting_fen_flag -q`
-- Red result: failed as expected because `DEFAULT_ENDGAME_POSITIONS` and `ascii_to_board()` did not exist and the old FEN-based CLI flag was still present.
-- Targeted green command: `uv run pytest tests/test_core.py::test_ascii_board_parser_reconstructs_python_chess_position tests/test_core.py::test_public_cli_uses_ascii_starting_board_not_fen tests/test_core.py::test_public_cli_rejects_old_starting_fen_flag -q`
+- Correction: removed the public compact-notation starting-position CLI flag, Modal parameter, and endgame compact-notation fixture strings. Diagnostic starting positions now use `board_to_ascii()` diagrams plus an explicit side-to-move.
+- Change: added `ascii_to_board()` as the inverse of the inspectable Unicode board format so tests/diagnostics can still construct exact `python-chess.Board` states without exposing compact chess notation at public or RL-facing boundaries.
+- Change: endgame validation fixtures are now `EndgamePosition(board_ascii, turn)` values, and validation game reports include starting/final ASCII boards rather than compact chess notation fields.
+- TDD red command: targeted tests for ASCII board parsing, ASCII-board CLI input, and removal of the legacy compact-notation position flag.
+- Red result: failed as expected because `DEFAULT_ENDGAME_POSITIONS` and `ascii_to_board()` did not exist and the old compact chess notation-based CLI flag was still present.
+- Targeted green command: targeted tests for ASCII board parsing, ASCII-board CLI input, and removal of the legacy compact-notation position flag.
 - Targeted green result: passed (`3 passed in 1.27s`).
 - Full verification command: `uv run pytest -q`
 - Full verification result: passed (`28 passed, 1 warning in 63.07s`).
+
+### 2026-05-27 18:44:17 UTC — Removed remaining compact-notation references
+
+- Correction: removed remaining compact-notation references from tests, docs, code comments, and historical log text so the repo consistently describes ASCII board diagrams as the diagnostic/state representation.
+- Change: added a repository text guard that scans Python and Markdown files for the legacy notation token without spelling it directly in source, preventing accidental reintroduction.
+- TDD red command: `uv run pytest tests/test_core.py::test_repository_text_does_not_reintroduce_legacy_position_notation -q`
+- Red result: failed as expected, identifying remaining references in README, docs, environment comments, and tests.
+- Targeted green command: `uv run pytest tests/test_core.py::test_public_cli_has_no_legacy_position_flag tests/test_core.py::test_repository_text_does_not_reintroduce_legacy_position_notation -q`
+- Targeted green result: passed (`2 passed in 1.47s`).
+- Full verification command: `uv run pytest -q`
+- Full verification result: passed (`29 passed, 1 warning in 67.76s`).

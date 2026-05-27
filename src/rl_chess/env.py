@@ -101,7 +101,7 @@ def ascii_to_board(board_ascii: str, turn: bool) -> chess.Board:
     """Parse the inspectable Unicode board diagram back into python-chess.
 
     The text format intentionally mirrors board_to_ascii(), so fixtures and
-    diagnostics can stay human-readable instead of passing FEN around public
+    diagnostics can stay human-readable instead of passing compact chess notation around public
     training/validation boundaries.
     """
 
