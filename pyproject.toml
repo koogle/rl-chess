@@ -1,7 +1,7 @@
 [project]
 name = "rl-chess"
 version = "0.1.0"
-description = "Add your description here"
+description = "Learning-first NN-guided PUCT reinforcement learning loop for chess"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

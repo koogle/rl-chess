@@ -103,12 +103,12 @@ def test_public_cli_uses_ascii_starting_board(monkeypatch, tmp_path, capsys):
     assert "loop=nn-puct" in capsys.readouterr().out
 
 
-def test_public_cli_has_no_legacy_position_flag():
+def test_public_cli_exposes_only_ascii_starting_board_flags():
     from rl_chess import cli
 
     parser = cli.build_parser()
-    legacy_flag = "--starting-" + "f" + "en"
-    assert legacy_flag not in parser.format_help()
+    compact_position_flag = "--starting-" + "f" + "en"
+    assert compact_position_flag not in parser.format_help()
 
 
 def test_policy_value_trainer_reduces_loss_on_repeated_target():

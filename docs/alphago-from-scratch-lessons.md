@@ -115,12 +115,12 @@ This keeps the implementation cleaner and matches the episode's broader point th
 
 ### 4. The value target is very sparse
 
-Current value targets come from the final game result. If a game is truncated by `max_plies`, it is treated as a draw.
+Current self-play value targets come from the final game result. Training self-play should therefore run until a terminal `python-chess` result; `max_plies` is only a safety guard and raises if a non-terminal game reaches it.
 
-That is clean, but weak:
+That is clean, but sparse:
 
 - many early positions get the same delayed target
-- truncated games can teach false draw values
+- artificial capped draws can teach false values if they leak back into training data
 - weak early models may generate low-quality late-game data
 
 The episode's warning applies directly: if the value head is poor, MCTS can amplify bad evaluation. The repo should therefore treat loss curves as plumbing checks, not strength proof.
@@ -152,8 +152,8 @@ The next improvements should preserve the repo's simple shape while making the t
    - This improves opening diversity without making every tactical position noisy.
 
 4. **Avoid misleading truncation**
-   - Prefer shorter validation/self-play settings that actually terminate, or separately mark truncated examples.
-   - Do not treat a large fraction of truncations as evidence of model strength.
+   - Let training self-play reach terminal outcomes instead of converting cap hits into draws.
+   - Keep validation caps explicit, and treat capped validation draws as a measurement limit rather than proof of strength.
 
 5. **Exploit chess symmetries only where legal**
    - Board flips by color are useful.

@@ -341,7 +341,7 @@ def run_endgame_value_validation(
     loss_curve: list[dict[str, float | int]] = []
     for step in range(steps):
         batch = random.sample(examples, k=min(batch_size, len(examples)))
-        loss = train_value_batch(model, optimizer, batch)
+        train_value_batch(model, optimizer, batch)
         if step == 0 or (step + 1) % report_every == 0 or step + 1 == steps:
             loss_curve.append({"step": step + 1, "value_mse": evaluate_values(model, examples)["mse"]})
     after = evaluate_values(model, examples)

@@ -4,14 +4,14 @@ Learning-first reinforcement learning loops for chess, implemented by hand aroun
 
 ## What is here
 
-- `rl_chess.env.ChessEnv`: tiny environment wrapper over `python-chess.Board`.
-- `rl_chess.state`: state helpers for Unicode board diagrams, legal UCI moves, and simple 12-plane board tensors.
-- `rl_chess.self_play.play_episode`: alternates policies through one game.
-- `rl_chess.replay.ReplayBuffer`: bounded replay storage.
-- `rl_chess.agents.TabularMoveValueAgent`: minimal ε-greedy tabular move-value learner.
-- `rl_chess.train.train_self_play`: the core training loop.
-- `rl_chess.mcts.MCTS`: hand-written UCT Monte Carlo Tree Search using selection, expansion, random rollout evaluation, and backpropagation.
-- `rl_chess.modal_app`: Modal entrypoint for remote training.
+- `rl_chess.env`: tiny `python-chess.Board` wrapper plus Unicode board diagram conversion helpers.
+- `rl_chess.nn_model.PolicyValueNet`: small policy/value network over 12 piece planes plus side-to-move.
+- `rl_chess.puct_mcts.PUCTMCTS`: hand-written neural-net-guided PUCT search over legal UCI moves.
+- `rl_chess.self_play.play_self_game`: one AlphaZero-style self-play game that records visit-count policy targets and terminal value targets.
+- `rl_chess.train.train`: replay-buffered policy/value training loop with optional checkpointing.
+- `rl_chess.validation`: model-vs-Stockfish evaluation helpers.
+- `rl_chess.endgame_validation`: narrow KQK value-head overfit/greedy-conversion diagnostic.
+- `rl_chess.modal_app`: Modal entrypoints that call the same local training and validation code remotely.
 
 ## Direction
 
@@ -51,7 +51,7 @@ The first-run preset is deliberately still small enough for local iteration but 
 uv run modal run src/rl_chess/modal_app.py --episodes 1000 --seed 123
 ```
 
-The Modal app runs the same `train_self_play` function remotely, so local and remote execution share one core loop.
+The Modal app runs the same `train()` loop remotely, so local and remote execution share one core implementation.
 
 ## Endgame value validation
 
@@ -110,7 +110,7 @@ uv run pytest -q
 - Correction: reverted the mistaken side-to-move input-plane removal. The model again receives the side-to-move plane.
 - Change: removed truncation from self-play/training metrics and checkpoint summaries. Self-play now either reaches a terminal `python-chess` result or raises if an optional safety `max_plies` cap is hit while non-terminal.
 - Change: first-meaningful training preset now uses uncapped self-play (`max_plies=None`). CLI/Modal `--max-plies` remains only as a safety cap; `0`/omitted means no cap.
-- Change: added temporary compact-notation starting-position support for deterministic smoke tests without relying on artificial truncation. This was later removed because diagnostic positions should use ASCII board diagrams.
+- Change: added temporary compact starting-position support for deterministic smoke tests without relying on artificial truncation. This was later removed because diagnostic positions should use ASCII board diagrams.
 - TDD red command: `uv run pytest tests/test_core.py::test_self_play_rejects_safety_cap_instead_of_truncating_game tests/test_core.py::test_training_metrics_do_not_report_truncation tests/test_core.py::test_first_meaningful_run_is_bigger_than_smoke_but_bounded -q`
 - Red result: failed as expected because capped non-terminal self-play still returned a truncated game, `train()` did not accept `starting_board`, and `FIRST_MEANINGFUL_RUN.max_plies` was still `120`.
 - Targeted green command: `uv run pytest tests/test_core.py::test_self_play_rejects_safety_cap_instead_of_truncating_game tests/test_core.py::test_training_metrics_do_not_report_truncation tests/test_core.py::test_first_meaningful_run_is_bigger_than_smoke_but_bounded tests/test_core.py::test_cli_smoke tests/test_core.py::test_modal_remote_training_entrypoint_can_run_tiny_local_smoke -q`
@@ -120,28 +120,41 @@ uv run pytest -q
 
 ### 2026-05-27 18:40:45 UTC — Replaced diagnostic compact chess notation plumbing with ASCII boards
 
-- Correction: removed the public compact-notation starting-position CLI flag, Modal parameter, and endgame compact-notation fixture strings. Diagnostic starting positions now use `board_to_ascii()` diagrams plus an explicit side-to-move.
+- Correction: removed the public compact starting-position CLI flag, Modal parameter, and endgame compact fixture strings. Diagnostic starting positions now use `board_to_ascii()` diagrams plus an explicit side-to-move.
 - Change: added `ascii_to_board()` as the inverse of the inspectable Unicode board format so tests/diagnostics can still construct exact `python-chess.Board` states without exposing compact chess notation at public or RL-facing boundaries.
 - Change: endgame validation fixtures are now `EndgamePosition(board_ascii, turn)` values, and validation game reports include starting/final ASCII boards rather than compact chess notation fields.
-- TDD red command: targeted tests for ASCII board parsing, ASCII-board CLI input, and removal of the legacy compact-notation position flag.
+- TDD red command: targeted tests for ASCII board parsing, ASCII-board CLI input, and removal of the previous compact starting-position flag.
 - Red result: failed as expected because `DEFAULT_ENDGAME_POSITIONS` and `ascii_to_board()` did not exist and the old compact chess notation-based CLI flag was still present.
-- Targeted green command: targeted tests for ASCII board parsing, ASCII-board CLI input, and removal of the legacy compact-notation position flag.
+- Targeted green command: targeted tests for ASCII board parsing, ASCII-board CLI input, and removal of the previous compact starting-position flag.
 - Targeted green result: passed (`3 passed in 1.27s`).
 - Full verification command: `uv run pytest -q`
 - Full verification result: passed (`28 passed, 1 warning in 63.07s`).
 
-### 2026-05-27 18:44:17 UTC — Removed remaining compact-notation references
+### 2026-05-27 18:44:17 UTC — Removed remaining compact position references
 
-- Correction: removed remaining compact-notation references from tests, docs, code comments, and historical log text so the repo consistently describes ASCII board diagrams as the diagnostic/state representation.
-- Targeted verification command: targeted tests for ASCII board parsing, ASCII-board CLI input, and removal of the legacy compact-notation position flag.
+- Correction: removed remaining compact position references from tests, docs, code comments, and historical log text so the repo consistently describes ASCII board diagrams as the diagnostic/state representation.
+- Targeted verification command: targeted tests for ASCII board parsing, ASCII-board CLI input, and removal of the previous compact starting-position flag.
 - Targeted verification result: passed (`3 passed in 1.32s`).
 - Full verification command: `uv run pytest -q`
 - Full verification result: passed (`28 passed, 1 warning in 64.25s`).
 
 ### 2026-05-27 18:53:33 UTC — Removed over-broad repository text guard
 
-- Correction: removed the repository-wide text guard test. The focused public-surface regression test remains: the CLI parser help must not expose the legacy compact-notation starting-position flag.
-- Targeted verification command: targeted tests for ASCII board parsing, ASCII-board CLI input, and removal of the legacy compact-notation position flag.
+- Correction: removed the repository-wide text guard test. The focused public-surface regression test remains: the CLI parser help must expose only ASCII starting-board flags.
+- Targeted verification command: targeted tests for ASCII board parsing, ASCII-board CLI input, and removal of the previous compact starting-position flag.
 - Targeted verification result: passed (`3 passed in 1.32s`).
 - Full verification command: `uv run pytest -q`
 - Full verification result: passed (`28 passed, 1 warning in 64.25s`).
+
+### 2026-05-27 20:23:46 UTC — Cleaned stale repo docs and metadata
+
+- Cleanup: updated the README component list, Modal training wording, and historical plan doc to match the current NN-guided PUCT implementation (`env`, `nn_model`, `puct_mcts`, `self_play`, `train`, validation, and thin Modal wrappers).
+- Cleanup: replaced the placeholder package description in `pyproject.toml`, exported `ascii_to_board` from the package root, and removed an unused local variable in endgame validation.
+- Cleanup: renamed the focused CLI public-surface regression test so it describes the current ASCII starting-board interface rather than old terminology.
+- Search verification: swept tracked files for stale module names, previous public starting-position terms, placeholder metadata, and work-marker comments; result was no matches outside intentional historical metrics/tests.
+- Lint command: `uvx ruff check .`
+- Lint result: passed (`All checks passed!`).
+- Targeted verification command: `uv run pytest tests/test_core.py::test_public_cli_exposes_only_ascii_starting_board_flags tests/test_core.py::test_ascii_board_parser_reconstructs_python_chess_position tests/test_core.py::test_training_metrics_do_not_report_truncation -q`
+- Targeted verification result: passed (`3 passed in 2.25s`).
+- Full verification command: `uv run pytest -q`
+- Full verification result: passed (`28 passed, 1 warning in 63.92s`).
