@@ -158,3 +158,13 @@ uv run pytest -q
 - Targeted verification result: passed (`3 passed in 2.25s`).
 - Full verification command: `uv run pytest -q`
 - Full verification result: passed (`28 passed, 1 warning in 63.92s`).
+
+### 2026-05-27 20:33:07 UTC — Investigated requirements for low-Elo progress runs
+
+- Investigation: inspected the current training loop, first-meaningful preset, Modal runner, and Stockfish validation wrapper to identify what is missing for a meaningful progress run.
+- Stockfish capability check: local Stockfish resolves to `/home/hermes/.local/bin/stockfish`; `UCI_Elo` supports `1320–3190`, and requested Elo values below `1320` map to `Skill Level: 0` through the current wrapper.
+- Runtime diagnostic command: ran tiny local `train()` probes with `hidden_channels=64`, `residual_blocks=4`, one game, one train step, and `simulations in {8,16,32}`.
+- Runtime diagnostic result: examples/seconds were approximately `190/7.52s`, `368/21.45s`, and `129/17.80s`, showing full-start self-play game length dominates runtime and is stochastic.
+- Low-Elo diagnostic command: trained a small local model with `iterations=2`, `games_per_iteration=2`, `simulations=8`, `train_steps=4`, then evaluated 4 games against requested Elo `500` / Stockfish `Skill Level 0`.
+- Low-Elo diagnostic result: training took `27.48s` for `4` games and `983` examples; final losses were `[3.583, 3.624, 3.588, 3.583, 3.044, 3.256, 3.250, 3.268]`; validation took `2.80s` and scored `0/4` (`wins=0`, `losses=4`, `draws=0`, `score=0.000`).
+- Interpretation: the current code can execute the loop and evaluate a weak engine, but a meaningful run needs checkpoint-by-checkpoint evaluation, a lower/noisier baseline ladder before Stockfish, and larger remote self-play scale than the current tiny preset.
