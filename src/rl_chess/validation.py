@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import random
 import shutil
 from typing import Protocol
 
@@ -98,6 +99,17 @@ class FirstLegalPlayer:
 
 
 @dataclass
+class RandomPlayer:
+    seed: int | None = None
+
+    def __post_init__(self) -> None:
+        self.rng = random.Random(self.seed)
+
+    def select_move(self, board: chess.Board) -> chess.Move:
+        return self.rng.choice(list(board.legal_moves))
+
+
+@dataclass
 class FixedMovePlayer:
     moves: list[str]
 
@@ -188,6 +200,7 @@ def play_validation_match(
     baseline: Player,
     games: int = 2,
     max_plies: int = 200,
+    starting_board: chess.Board | None = None,
 ) -> ValidationResult:
     if games <= 0:
         raise ValueError("games must be positive")
@@ -198,6 +211,7 @@ def play_validation_match(
                 candidate=candidate,
                 baseline=baseline,
                 candidate_color=chess.WHITE if game_idx % 2 == 0 else chess.BLACK,
+                starting_board=starting_board,
                 max_plies=max_plies,
             )
         )
@@ -217,3 +231,18 @@ def validate_model_against_stockfish(
     candidate = PUCTModelPlayer(model=model, simulations=simulations, seed=seed)
     with StockfishPlayer(path=stockfish_path, elo=elo, movetime=stockfish_movetime) as stockfish:
         return play_validation_match(candidate=candidate, baseline=stockfish, games=games, max_plies=max_plies)
+
+
+def validate_model_against_random(
+    model: PolicyValueNet,
+    games: int = 12,
+    max_plies: int = 200,
+    simulations: int = 64,
+    seed: int | None = None,
+) -> ValidationResult:
+    return play_validation_match(
+        candidate=PUCTModelPlayer(model=model, simulations=simulations, seed=seed),
+        baseline=RandomPlayer(seed=seed),
+        games=games,
+        max_plies=max_plies,
+    )

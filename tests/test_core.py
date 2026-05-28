@@ -10,10 +10,12 @@ from rl_chess.train import load_checkpoint_model, train
 from rl_chess.validation import (
     FixedMovePlayer,
     FirstLegalPlayer,
+    RandomPlayer,
     ValidationResult,
+    play_validation_game,
+    play_validation_match,
     resolve_stockfish_path,
     stockfish_strength_config,
-    play_validation_game,
 )
 
 KQK_BLACK_TO_MOVE = """  a b c d e f g h
@@ -304,3 +306,15 @@ def test_validation_game_can_score_candidate_loss_as_black():
     assert result == ValidationResult(wins=0, losses=1, draws=0)
     assert result.score == 0.0
     assert result.passed is False
+
+
+def test_random_validation_baseline_plays_requested_games():
+    result = play_validation_match(
+        candidate=FirstLegalPlayer(),
+        baseline=RandomPlayer(seed=1),
+        games=12,
+        max_plies=1,
+    )
+
+    assert result.games == 12
+    assert result.draws == 12

@@ -47,6 +47,7 @@ def train_remote(
     residual_blocks: int = 4,
     checkpoint_dir: str | None = None,
     validate_stockfish: bool = False,
+    validate_random: bool = False,
     stockfish_elo: int = 1320,
     validation_games: int = 2,
     validation_max_plies: int = 200,
@@ -58,7 +59,7 @@ def train_remote(
     from rl_chess.env import ascii_to_board
     from rl_chess.nn_model import PolicyValueNet
     from rl_chess.train import train
-    from rl_chess.validation import validate_model_against_stockfish
+    from rl_chess.validation import validate_model_against_random, validate_model_against_stockfish
 
     model = PolicyValueNet(hidden_channels=hidden_channels, residual_blocks=residual_blocks)
 
@@ -125,6 +126,24 @@ def train_remote(
                 "validation_passed": validation.passed,
             }
         )
+    if validate_random:
+        validation = validate_model_against_random(
+            model=model,
+            games=validation_games,
+            max_plies=validation_max_plies,
+            simulations=simulations,
+            seed=seed,
+        )
+        summary.update(
+            {
+                "random_validation_games": validation.games,
+                "random_validation_wins": validation.wins,
+                "random_validation_losses": validation.losses,
+                "random_validation_draws": validation.draws,
+                "random_validation_score": validation.score,
+                "random_validation_passed": validation.passed,
+            }
+        )
     return summary
 
 
@@ -143,6 +162,7 @@ def main(
     residual_blocks: int = 4,
     checkpoint_dir: str | None = None,
     validate_stockfish: bool = False,
+    validate_random: bool = False,
     stockfish_elo: int = 1320,
     validation_games: int = 2,
     validation_max_plies: int = 200,
@@ -166,6 +186,7 @@ def main(
             residual_blocks=residual_blocks,
             checkpoint_dir=checkpoint_dir,
             validate_stockfish=validate_stockfish,
+            validate_random=validate_random,
             stockfish_elo=stockfish_elo,
             validation_games=validation_games,
             validation_max_plies=validation_max_plies,
