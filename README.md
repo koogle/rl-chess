@@ -9,9 +9,8 @@ Learning-first reinforcement learning loops for chess, implemented by hand aroun
 - `rl_chess.puct_mcts.PUCTMCTS`: hand-written neural-net-guided PUCT search over legal UCI moves.
 - `rl_chess.self_play.play_self_game`: one AlphaZero-style self-play game that records visit-count policy targets and terminal value targets.
 - `rl_chess.train.train`: replay-buffered policy/value training loop with optional checkpointing.
-- `rl_chess.validation`: model-vs-Stockfish evaluation helpers.
-- `rl_chess.endgame_validation`: narrow KQK value-head overfit/greedy-conversion diagnostic.
-- `rl_chess.modal_app`: Modal entrypoints that call the same local training and validation code remotely.
+- `rl_chess.validation`: model-vs-baseline evaluation helpers, including weakest Stockfish / supported UCI Elo baselines.
+- `rl_chess.modal_app`: the supported training/evaluation entrypoint for real runs on Modal.
 
 ## Direction
 
@@ -19,55 +18,31 @@ The AlphaGo lesson for this project is concise:
 
 > Search improves the model; the model improves search.
 
-We keep the board inspectable with Unicode chess diagrams instead of exposing compact chess notation to the RL loop. The next milestone is MCTS self-play training: run search at each board, store the visit-count policy as a better per-move target, then train a small policy/value learner from those examples. Local training remains the source of truth; Modal only scales the same loop remotely.
+We keep the board inspectable with Unicode chess diagrams instead of exposing compact chess notation to the RL loop. The target architecture is Modal-first: local code owns the inspectable core RL/search behavior and local files only receive checkpoints/artifacts, while training and evaluation runs execute through Modal. The next scale step is checkpoint-sized update blocks: many parallel self-play games, a bounded number of gradient updates, one checkpoint, then evaluation of that checkpoint.
 
 See `docs/alphago-from-scratch-lessons.md` for the Dwarkesh/Eric Jang AlphaGo-from-scratch notes, and `docs/plans/2026-05-25-rl-mcts-self-play-modal.md` for the implementation plan.
 
-## Local training
-
-Smoke run:
-
-```bash
-uv run rl-chess --iterations 1 --max-plies 1 --mcts-iterations 2 --seed 123
-```
-
-`--max-plies` is a safety cap, not a training truncation mechanism. If a game reaches the cap while non-terminal, the run raises instead of converting the unfinished game into a draw target. Omit the flag, or pass `0`, for uncapped self-play that runs until `python-chess` reports a terminal result.
-
-Meaningful first run:
-
-```bash
-uv run rl-chess \
-  --first-meaningful-run \
-  --checkpoint-dir runs/first-meaningful/checkpoints \
-  --stockfish-path ~/.local/bin/stockfish \
-  --seed 123
-```
-
-The first-run preset is deliberately still small enough for local iteration but no longer a one-batch smoke test: 3 iterations, 2 self-play games per iteration, 32 PUCT simulations per move, 4 training updates per iteration, replay capacity 5,000, checkpoint after every iteration, and 4 validation games against the Stockfish UCI Elo floor.
-
 ## Modal training
 
-```bash
-uv run modal run src/rl_chess/modal_app.py --episodes 1000 --seed 123
-```
-
-The Modal app runs the same `train()` loop remotely, so local and remote execution share one core implementation.
-
-## Endgame value validation
-
-The endgame value-validation loop is a narrow, deterministic check that the model can learn terminal-backed value targets before we scale self-play. It builds a small dataset from ten KQK forced-mate positions, trains only the value head, and then checks whether a one-ply value-greedy player can convert the positions within the ply cap.
-
-Local smoke:
+Tiny smoke run:
 
 ```bash
-uv run pytest tests/test_core.py::test_endgame_value_validation_can_overfit_tiny_model_smoke -q
+uv run modal run src/rl_chess/modal_app.py --iterations 1 --max-plies 1 --simulations 2 --seed 123
 ```
 
-Remote Modal validation:
+Pilot checkpoint block sizing target:
 
-```bash
-uv run modal run src/rl_chess/modal_app.py --validate-endgames --endgame-steps 800 --seed 123
+```text
+self_play_games_per_checkpoint = 128
+parallel_workers = 32
+games_per_worker = 4
+mcts_simulations = 8
+batch_size = 512
+train_steps ≈ 125
+eval_every_checkpoint = true
 ```
+
+`--max-plies` is a safety cap, not a training truncation mechanism. If a game reaches the cap while non-terminal, the run raises instead of converting the unfinished game into a draw target. Omit the flag for uncapped self-play that runs until `python-chess` reports a terminal result.
 
 ## Tests
 
@@ -168,3 +143,15 @@ uv run pytest -q
 - Low-Elo diagnostic command: trained a small local model with `iterations=2`, `games_per_iteration=2`, `simulations=8`, `train_steps=4`, then evaluated 4 games against requested Elo `500` / Stockfish `Skill Level 0`.
 - Low-Elo diagnostic result: training took `27.48s` for `4` games and `983` examples; final losses were `[3.583, 3.624, 3.588, 3.583, 3.044, 3.256, 3.250, 3.268]`; validation took `2.80s` and scored `0/4` (`wins=0`, `losses=4`, `draws=0`, `score=0.000`).
 - Interpretation: the current code can execute the loop and evaluate a weak engine, but a meaningful run needs checkpoint-by-checkpoint evaluation, a lower/noisier baseline ladder before Stockfish, and larger remote self-play scale than the current tiny preset.
+
+### 2026-05-28 05:42:14 UTC — Removed legacy local/diagnostic entrypoints
+
+- Cleanup: removed the local `rl-chess` console training entrypoint, the old first-meaningful-run preset module, and the KQK endgame value-validation diagnostic. The supported execution surface is now `src/rl_chess/modal_app.py` plus the shared core training/evaluation modules.
+- TDD red command: `uv run pytest tests/test_core.py::test_package_has_no_local_console_training_entrypoint tests/test_core.py::test_modal_app_exposes_training_entrypoint_without_endgame_diagnostic -q`
+- Red result: failed as expected because `pyproject.toml` still exposed the console script and `modal_app` still exported `validate_endgames_remote`.
+- Targeted green command: `uv run pytest tests/test_core.py::test_package_has_no_local_console_training_entrypoint tests/test_core.py::test_modal_app_exposes_training_entrypoint_without_endgame_diagnostic tests/test_core.py::test_modal_remote_training_accepts_ascii_starting_board -q`
+- Targeted green result: passed (`3 passed, 1 warning in 2.35s`).
+- Full verification command: `uv run pytest -q`
+- Full verification result: passed (`21 passed, 1 warning in 2.95s`).
+- Lint/compile/diff-check command: `uvx ruff check . && uv run python -m compileall -q src tests && git diff --check`
+- Lint/compile/diff-check result: passed (`All checks passed!`; no diff whitespace errors after removing one trailing blank line).
