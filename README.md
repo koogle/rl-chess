@@ -166,3 +166,19 @@ uv run pytest -q
 - Artifact verification command: `uv run modal volume ls rl-chess-checkpoints three-checkpoint-smoke-20260528-064014`
 - Artifact verification result: all three checkpoint files were listed in the Modal volume.
 - Interpretation: the current Modal loop can produce and persist three checkpoints, but this was only a structural smoke test; it used a one-move terminal diagnostic position and did not exercise meaningful full-game self-play or per-checkpoint evaluation.
+
+### 2026-05-28 07:38:15 UTC — Real three-checkpoint Modal training run with progress
+
+- Change before run: added per-checkpoint progress printing from the Modal training function so long runs expose `iteration`, cumulative games/examples, optimizer updates, latest loss, and checkpoint path as each checkpoint completes.
+- TDD red command: `uv run pytest tests/test_core.py::test_training_reports_progress_after_each_checkpoint -q`
+- Red result: failed as expected because `train()` did not accept `progress_callback`.
+- Green/full verification command: `uv run pytest tests/test_core.py::test_training_reports_progress_after_each_checkpoint -q && uv run pytest -q && uvx ruff check . && uv run python -m compileall -q src tests && git diff --check`
+- Green/full verification result: passed (`1 passed`; full suite `22 passed, 1 warning`; ruff/compile/diff-check passed).
+- Aborted stale no-progress attempt: stopped Modal app `ap-KF5sW1gIomRXokDMAmbNlL` after replacing it with the progress-enabled run.
+- Training command: `uv run modal run src/rl_chess/modal_app.py --iterations 3 --games-per-iteration 16 --simulations 8 --train-steps 32 --batch-size 512 --replay-capacity 50000 --learning-rate 0.001 --temperature 1.0 --hidden-channels 64 --residual-blocks 4 --checkpoint-dir /checkpoints/real-3ckpt-progress-20260528-071500 --seed 20260528`
+- Modal run: https://modal.com/apps/koogle-frick/main/ap-x8DsYKzqekTYYbH6ws76o6
+- Progress: checkpoint 1 at `games=16`, `examples=3516`, `updates=32`, `latest_loss=3.314674139022827`; checkpoint 2 at `games=32`, `examples=7343`, `updates=64`, `latest_loss=3.2679388523101807`; checkpoint 3 at `games=48`, `examples=10664`, `updates=96`, `latest_loss=3.403989791870117`.
+- Final result: completed successfully with `iterations=3`, `games=48`, `examples=10664`, `terminal_games=48`, `replay_size=10664`, and checkpoints `/checkpoints/real-3ckpt-progress-20260528-071500/iteration-0001.pt`, `/checkpoints/real-3ckpt-progress-20260528-071500/iteration-0002.pt`, `/checkpoints/real-3ckpt-progress-20260528-071500/iteration-0003.pt`.
+- Artifact verification command: `uv run modal volume ls rl-chess-checkpoints real-3ckpt-progress-20260528-071500`
+- Artifact verification result: all three checkpoint files were listed in the Modal volume.
+- Interpretation: this was real full-start self-play, not a one-move diagnostic. It is still a pilot-sized run at 32 updates/checkpoint, below the target ~125 updates/checkpoint; the next real run should use 128 games/checkpoint and ~125 updates/checkpoint after we add parallel self-play or raise the Modal timeout/worker plan.
