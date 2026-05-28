@@ -155,3 +155,14 @@ uv run pytest -q
 - Full verification result: passed (`21 passed, 1 warning in 2.95s`).
 - Lint/compile/diff-check command: `uvx ruff check . && uv run python -m compileall -q src tests && git diff --check`
 - Lint/compile/diff-check result: passed (`All checks passed!`; no diff whitespace errors after removing one trailing blank line).
+
+### 2026-05-28 06:41:03 UTC — Three-checkpoint Modal smoke loop
+
+- Command: `uv run modal run src/rl_chess/modal_app.py --iterations 3 --games-per-iteration 1 --max-plies 1 --simulations 1 --train-steps 1 --batch-size 1 --hidden-channels 8 --residual-blocks 0 --checkpoint-dir /checkpoints/three-checkpoint-smoke-20260528-064014 --starting-board-ascii <KQK_BLACK_TO_MOVE_ASCII> --starting-turn black --seed 123`
+- Modal run: https://modal.com/apps/koogle-frick/main/ap-pWAcIQbOVIxtwaQAS6xdGF
+- Result: completed successfully with `iterations=3`, `games=3`, `examples=3`, `terminal_games=3`, and `replay_size=3`.
+- Losses: total/value loss curve `[0.0004308084608055651, 0.0003438110579736531, 0.00026881162193603814]`; policy loss curve `[0.0, 0.0, 0.0]` because the diagnostic start position has only one legal move.
+- Checkpoints written to Modal volume: `/checkpoints/three-checkpoint-smoke-20260528-064014/iteration-0001.pt`, `/checkpoints/three-checkpoint-smoke-20260528-064014/iteration-0002.pt`, `/checkpoints/three-checkpoint-smoke-20260528-064014/iteration-0003.pt`.
+- Artifact verification command: `uv run modal volume ls rl-chess-checkpoints three-checkpoint-smoke-20260528-064014`
+- Artifact verification result: all three checkpoint files were listed in the Modal volume.
+- Interpretation: the current Modal loop can produce and persist three checkpoints, but this was only a structural smoke test; it used a one-move terminal diagnostic position and did not exercise meaningful full-game self-play or per-checkpoint evaluation.
