@@ -119,3 +119,12 @@ uv run pytest -q
 
 - Methodology change: refined `AGENTS.md` so the research log is reserved for structural architecture changes, methodology progress, meaningful training/evaluation experiments, and design decisions.
 - Cleanup: removed routine RED/GREEN/full-suite test output, standalone documentation verification, transient aborted-run detail, and mechanical cleanup notes that did not change architecture or methodology.
+
+### 2026-05-28 14:54:10 UTC — Added and ran random-baseline validation
+
+- Methodology change: added a random legal-move baseline to the validation ladder so early models can be checked against a weaker signal before Stockfish.
+- Command: `uv run modal run src/rl_chess/modal_app.py --iterations 1 --games-per-iteration 16 --simulations 8 --train-steps 64 --batch-size 512 --replay-capacity 50000 --learning-rate 0.001 --temperature 1.0 --hidden-channels 64 --residual-blocks 4 --checkpoint-dir /checkpoints/random-eval-16train-12games-20260528-143441 --validate-random --validation-games 12 --validation-max-plies 200 --seed 20260528`
+- Modal run: https://modal.com/apps/koogle-frick/main/ap-MiAxPCrqmNXO2avDAnrnvA
+- Training result: `games=16`, `terminal_games=16`, `examples=5348`, `updates=64`, latest loss `2.9693610668182373`; checkpoint `/checkpoints/random-eval-16train-12games-20260528-143441/iteration-0001.pt`.
+- Random validation: `games=12`, `wins=1`, `losses=0`, `draws=11`, `score=0.5416666666666666`, `passed=True`.
+- Interpretation: this clears the first weak baseline by avoiding losses and scoring just above 0.5, but most games are still draws; next methodology step should evaluate each checkpoint against random and improve decisiveness before treating Stockfish as the main signal.
