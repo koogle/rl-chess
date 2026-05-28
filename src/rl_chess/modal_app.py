@@ -61,6 +61,23 @@ def train_remote(
     from rl_chess.validation import validate_model_against_stockfish
 
     model = PolicyValueNet(hidden_channels=hidden_channels, residual_blocks=residual_blocks)
+
+    def report_progress(progress: dict[str, object]) -> None:
+        print(
+            "checkpoint_progress "
+            + " ".join(
+                [
+                    f"iteration={progress['iteration']}",
+                    f"games={progress['games']}",
+                    f"examples={progress['examples']}",
+                    f"updates={progress['updates']}",
+                    f"latest_loss={progress['latest_loss']}",
+                    f"checkpoint_path={progress['checkpoint_path']}",
+                ]
+            ),
+            flush=True,
+        )
+
     metrics = train(
         model=model,
         iterations=iterations,
@@ -75,6 +92,7 @@ def train_remote(
         seed=seed,
         checkpoint_dir=checkpoint_dir,
         starting_board=None if starting_board_ascii is None else ascii_to_board(starting_board_ascii, starting_turn == "white"),
+        progress_callback=report_progress if checkpoint_dir is not None else None,
     )
     summary = _jsonable_metrics(metrics)
     summary.update(

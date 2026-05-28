@@ -205,6 +205,27 @@ def test_training_writes_iteration_checkpoints(tmp_path):
     assert isinstance(reloaded, PolicyValueNet)
 
 
+def test_training_reports_progress_after_each_checkpoint(tmp_path):
+    progress = []
+    train(
+        model=PolicyValueNet(hidden_channels=8),
+        iterations=2,
+        games_per_iteration=1,
+        simulations=2,
+        max_plies=1,
+        train_steps=1,
+        starting_board=ascii_to_board(KQK_BLACK_TO_MOVE, turn=chess.BLACK),
+        seed=3,
+        checkpoint_dir=tmp_path,
+        progress_callback=progress.append,
+    )
+
+    assert [item["iteration"] for item in progress] == [1, 2]
+    assert [item["checkpoint_path"].name for item in progress] == ["iteration-0001.pt", "iteration-0002.pt"]
+    assert progress[-1]["games"] == 2
+    assert progress[-1]["updates"] == 2
+
+
 def test_training_rejects_invalid_public_knobs():
     model = PolicyValueNet(hidden_channels=8)
     bad_configs = [

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 import random
+from collections.abc import Callable
 from typing import Any
 
 import torch
@@ -77,6 +78,7 @@ def train(
     seed: int | None = None,
     checkpoint_dir: str | Path | None = None,
     starting_board: Any | None = None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> TrainMetrics:
     if iterations <= 0:
         raise ValueError("iterations must be positive")
@@ -148,6 +150,21 @@ def train(
                 checkpoint_paths=[*checkpoint_paths, checkpoint_path],
             )
             checkpoint_paths.append(save_checkpoint(model, checkpoint_path, snapshot))
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "iteration": iteration + 1,
+                        "games": (iteration + 1) * games_per_iteration,
+                        "examples": examples,
+                        "terminal_games": terminal_games,
+                        "replay_size": len(replay),
+                        "updates": len(losses),
+                        "latest_loss": losses[-1] if losses else None,
+                        "latest_policy_loss": policy_losses[-1] if policy_losses else None,
+                        "latest_value_loss": value_losses[-1] if value_losses else None,
+                        "checkpoint_path": checkpoint_path,
+                    }
+                )
 
     return TrainMetrics(
         iterations=iterations,
