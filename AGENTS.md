@@ -1,17 +1,17 @@
 # Agent instructions for rl-chess
 
-## Research log is mandatory
+## Research log is mandatory, but curated
 
-All code changes, validation runs, training experiments, and meaningful design decisions must be recorded in the README research log.
+The README research log is for structural architecture changes, methodology progress, meaningful training/evaluation experiments, and design decisions. Do not add routine test-only verification, mechanical cleanup, or transient debugging details unless they changed the methodology or exposed an important constraint.
 
 For every entry:
 
 - Add the current date and time, including timezone.
 - State what changed or what experiment ran.
-- Include the exact command when applicable.
-- Record the observed result, including key metrics and whether it passed or failed.
+- Include the exact command for training/evaluation experiments and other methodology-relevant runs.
+- Record observed metrics, pass/fail outcomes, and interpretation for experiments.
 - If the run produced checkpoints or artifacts, record their paths.
-- Keep entries concise and factual; do not replace the log with only commit messages.
+- Keep entries concise and factual; omit routine RED/GREEN/full-suite test logs unless the test itself defines a new structural invariant.
 
 ## Project direction
 
