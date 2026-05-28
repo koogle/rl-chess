@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 import random
-from collections.abc import Callable
 from typing import Any
 
+import chess
 import torch
 
-from rl_chess.nn_model import PolicyValueNet, train_batch
-from rl_chess.self_play import TrainingExample, play_self_game
+from rl_chess.nn_model import PolicyValueNet, TrainStats, train_batch
+from rl_chess.self_play import GameStats, SelfPlayGame, TrainingExample, play_self_game
 
 
 @dataclass(frozen=True)
@@ -18,7 +20,7 @@ class TrainMetrics:
     games: int
     examples: int
     terminal_games: int
-    replay_size: int
+    iteration_examples: int
     loss_curve: list[float] = field(default_factory=list)
     policy_loss_curve: list[float] = field(default_factory=list)
     value_loss_curve: list[float] = field(default_factory=list)
@@ -46,7 +48,7 @@ def checkpoint_metrics(metrics: TrainMetrics) -> dict[str, object]:
         "games": metrics.games,
         "examples": metrics.examples,
         "terminal_games": metrics.terminal_games,
-        "replay_size": metrics.replay_size,
+        "iteration_examples": metrics.iteration_examples,
         "loss_curve": list(metrics.loss_curve),
         "policy_loss_curve": list(metrics.policy_loss_curve),
         "value_loss_curve": list(metrics.value_loss_curve),
@@ -64,6 +66,93 @@ def load_checkpoint_model(path: str | Path) -> PolicyValueNet:
     return model
 
 
+def _model_snapshot(model: PolicyValueNet) -> dict[str, torch.Tensor]:
+    return {name: tensor.detach().cpu().clone() for name, tensor in model.state_dict().items()}
+
+
+def _play_chunk(
+    state_dict: dict[str, torch.Tensor],
+    hidden_channels: int,
+    residual_blocks: int,
+    seeds: Sequence[int | None],
+    simulations: int,
+    max_plies: int | None,
+    temperature: float,
+    starting_board: chess.Board | None,
+) -> list[SelfPlayGame]:
+    worker_model = PolicyValueNet(hidden_channels=hidden_channels, residual_blocks=residual_blocks)
+    worker_model.load_state_dict(state_dict)
+    worker_model.eval()
+    return [
+        play_self_game(
+            worker_model,
+            simulations=simulations,
+            max_plies=max_plies,
+            temperature=temperature,
+            seed=game_seed,
+            starting_board=starting_board,
+        )
+        for game_seed in seeds
+    ]
+
+
+def generate_self_play_batch(
+    model: PolicyValueNet,
+    games: int,
+    simulations: int,
+    max_plies: int | None,
+    temperature: float,
+    seed_offset: int | None,
+    starting_board: chess.Board | None = None,
+    self_play_workers: int = 1,
+) -> list[SelfPlayGame]:
+    """Generate one fresh self-play batch from a frozen snapshot of the latest model."""
+
+    if games <= 0:
+        raise ValueError("games must be positive")
+    if self_play_workers <= 0:
+        raise ValueError("self_play_workers must be positive")
+
+    seeds = [None if seed_offset is None else seed_offset + game_idx for game_idx in range(games)]
+    if self_play_workers == 1 or games == 1:
+        return [
+            play_self_game(
+                model,
+                simulations=simulations,
+                max_plies=max_plies,
+                temperature=temperature,
+                seed=game_seed,
+                starting_board=starting_board,
+            )
+            for game_seed in seeds
+        ]
+
+    workers = min(self_play_workers, games)
+    chunks = [seeds[index::workers] for index in range(workers)]
+    state_dict = _model_snapshot(model)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        chunk_results = executor.map(
+            lambda chunk: _play_chunk(
+                state_dict=state_dict,
+                hidden_channels=model.hidden_channels,
+                residual_blocks=model.residual_blocks,
+                seeds=chunk,
+                simulations=simulations,
+                max_plies=max_plies,
+                temperature=temperature,
+                starting_board=starting_board,
+            ),
+            chunks,
+        )
+    games_by_chunk = list(chunk_results)
+    ordered: list[SelfPlayGame] = []
+    for game_index in range(games):
+        chunk_index = game_index % workers
+        position_in_chunk = game_index // workers
+        ordered.append(games_by_chunk[chunk_index][position_in_chunk])
+    return ordered
+
+
 def train(
     model: PolicyValueNet,
     iterations: int,
@@ -72,12 +161,12 @@ def train(
     max_plies: int | None = None,
     train_steps: int = 1,
     batch_size: int = 64,
-    replay_capacity: int = 10_000,
     learning_rate: float = 1e-3,
     temperature: float = 1.0,
     seed: int | None = None,
     checkpoint_dir: str | Path | None = None,
     starting_board: Any | None = None,
+    self_play_workers: int = 1,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> TrainMetrics:
     if iterations <= 0:
@@ -92,45 +181,46 @@ def train(
         raise ValueError("train_steps must be positive")
     if batch_size <= 0:
         raise ValueError("batch_size must be positive")
-    if replay_capacity <= 0:
-        raise ValueError("replay_capacity must be positive")
     if learning_rate <= 0:
         raise ValueError("learning_rate must be positive")
     if temperature < 0:
         raise ValueError("temperature must be non-negative")
+    if self_play_workers <= 0:
+        raise ValueError("self_play_workers must be positive")
 
     if seed is not None:
         torch.manual_seed(seed)
     rng = random.Random(seed)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    replay: list[TrainingExample] = []
     losses: list[float] = []
     policy_losses: list[float] = []
     value_losses: list[float] = []
     checkpoint_paths: list[Path] = []
     examples = 0
     terminal_games = 0
+    latest_iteration_examples = 0
 
     for iteration in range(iterations):
-        for game_idx in range(games_per_iteration):
-            game_seed = None if seed is None else seed + iteration * games_per_iteration + game_idx
-            game = play_self_game(
-                model,
-                simulations=simulations,
-                max_plies=max_plies,
-                temperature=temperature,
-                seed=game_seed,
-                starting_board=starting_board,
-            )
-            replay.extend(game.examples)
-            del replay[:-replay_capacity]
-            examples += len(game.examples)
-            terminal_games += 1
+        seed_offset = None if seed is None else seed + iteration * games_per_iteration
+        games = generate_self_play_batch(
+            model=model,
+            games=games_per_iteration,
+            simulations=simulations,
+            max_plies=max_plies,
+            temperature=temperature,
+            seed_offset=seed_offset,
+            starting_board=starting_board,
+            self_play_workers=self_play_workers,
+        )
+        fresh_examples = [example for game in games for example in game.examples]
+        latest_iteration_examples = len(fresh_examples)
+        examples += latest_iteration_examples
+        terminal_games += len(games)
 
         for _ in range(train_steps):
-            if not replay:
+            if not fresh_examples:
                 continue
-            batch = rng.sample(replay, k=min(batch_size, len(replay)))
+            batch = rng.sample(fresh_examples, k=min(batch_size, len(fresh_examples)))
             stats = train_batch(model, optimizer, batch)
             losses.append(stats.total_loss)
             policy_losses.append(stats.policy_loss)
@@ -143,7 +233,7 @@ def train(
                 games=(iteration + 1) * games_per_iteration,
                 examples=examples,
                 terminal_games=terminal_games,
-                replay_size=len(replay),
+                iteration_examples=latest_iteration_examples,
                 loss_curve=list(losses),
                 policy_loss_curve=list(policy_losses),
                 value_loss_curve=list(value_losses),
@@ -156,8 +246,8 @@ def train(
                         "iteration": iteration + 1,
                         "games": (iteration + 1) * games_per_iteration,
                         "examples": examples,
+                        "iteration_examples": latest_iteration_examples,
                         "terminal_games": terminal_games,
-                        "replay_size": len(replay),
                         "updates": len(losses),
                         "latest_loss": losses[-1] if losses else None,
                         "latest_policy_loss": policy_losses[-1] if policy_losses else None,
@@ -171,7 +261,7 @@ def train(
         games=iterations * games_per_iteration,
         examples=examples,
         terminal_games=terminal_games,
-        replay_size=len(replay),
+        iteration_examples=latest_iteration_examples,
         loss_curve=losses,
         policy_loss_curve=policy_losses,
         value_loss_curve=value_losses,

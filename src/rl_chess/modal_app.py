@@ -24,7 +24,7 @@ def _jsonable_metrics(metrics: Any) -> dict[str, object]:
         "games": metrics.games,
         "examples": metrics.examples,
         "terminal_games": metrics.terminal_games,
-        "replay_size": metrics.replay_size,
+        "iteration_examples": metrics.iteration_examples,
         "loss_curve": metrics.loss_curve,
         "policy_loss_curve": metrics.policy_loss_curve,
         "value_loss_curve": metrics.value_loss_curve,
@@ -32,7 +32,7 @@ def _jsonable_metrics(metrics: Any) -> dict[str, object]:
     }
 
 
-@app.function(image=image, timeout=60 * 60, volumes={str(CHECKPOINT_ROOT): checkpoint_volume})
+@app.function(image=image, timeout=24 * 60 * 60, cpu=8, volumes={str(CHECKPOINT_ROOT): checkpoint_volume})
 def train_remote(
     iterations: int = 10,
     games_per_iteration: int = 1,
@@ -40,7 +40,6 @@ def train_remote(
     simulations: int = 64,
     train_steps: int = 1,
     batch_size: int = 64,
-    replay_capacity: int = 10_000,
     learning_rate: float = 1e-3,
     temperature: float = 1.0,
     hidden_channels: int = 64,
@@ -55,6 +54,7 @@ def train_remote(
     seed: int | None = None,
     starting_board_ascii: str | None = None,
     starting_turn: str = "white",
+    self_play_workers: int = 8,
 ) -> dict[str, object]:
     from rl_chess.env import ascii_to_board
     from rl_chess.nn_model import PolicyValueNet
@@ -71,6 +71,7 @@ def train_remote(
                     f"iteration={progress['iteration']}",
                     f"games={progress['games']}",
                     f"examples={progress['examples']}",
+                    f"iteration_examples={progress['iteration_examples']}",
                     f"updates={progress['updates']}",
                     f"latest_loss={progress['latest_loss']}",
                     f"checkpoint_path={progress['checkpoint_path']}",
@@ -87,12 +88,12 @@ def train_remote(
         max_plies=max_plies,
         train_steps=train_steps,
         batch_size=batch_size,
-        replay_capacity=replay_capacity,
         learning_rate=learning_rate,
         temperature=temperature,
         seed=seed,
         checkpoint_dir=checkpoint_dir,
         starting_board=None if starting_board_ascii is None else ascii_to_board(starting_board_ascii, starting_turn == "white"),
+        self_play_workers=self_play_workers,
         progress_callback=report_progress if checkpoint_dir is not None else None,
     )
     summary = _jsonable_metrics(metrics)
@@ -101,6 +102,7 @@ def train_remote(
             "hidden_channels": hidden_channels,
             "residual_blocks": residual_blocks,
             "checkpoint_dir": checkpoint_dir,
+            "self_play_workers": self_play_workers,
         }
     )
     if checkpoint_dir is not None:
@@ -155,7 +157,6 @@ def main(
     simulations: int = 64,
     train_steps: int = 1,
     batch_size: int = 64,
-    replay_capacity: int = 10_000,
     learning_rate: float = 1e-3,
     temperature: float = 1.0,
     hidden_channels: int = 64,
@@ -170,6 +171,7 @@ def main(
     seed: int | None = None,
     starting_board_ascii: str | None = None,
     starting_turn: str = "white",
+    self_play_workers: int = 8,
 ) -> None:
     print(
         train_remote.remote(
@@ -179,7 +181,6 @@ def main(
             simulations=simulations,
             train_steps=train_steps,
             batch_size=batch_size,
-            replay_capacity=replay_capacity,
             learning_rate=learning_rate,
             temperature=temperature,
             hidden_channels=hidden_channels,
@@ -194,5 +195,6 @@ def main(
             seed=seed,
             starting_board_ascii=starting_board_ascii,
             starting_turn=starting_turn,
+            self_play_workers=self_play_workers,
         )
     )

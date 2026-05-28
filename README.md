@@ -8,7 +8,7 @@ Learning-first reinforcement learning loops for chess, implemented by hand aroun
 - `rl_chess.nn_model.PolicyValueNet`: small policy/value network over 12 piece planes plus side-to-move.
 - `rl_chess.puct_mcts.PUCTMCTS`: hand-written neural-net-guided PUCT search over legal UCI moves.
 - `rl_chess.self_play.play_self_game`: one AlphaZero-style self-play game that records visit-count policy targets and terminal value targets.
-- `rl_chess.train.train`: replay-buffered policy/value training loop with optional checkpointing.
+- `rl_chess.train.train`: fresh-batch policy/value training loop with optional checkpointing; each iteration generates new self-play from the latest model snapshot, then updates only on that batch.
 - `rl_chess.validation`: model-vs-baseline evaluation helpers, including weakest Stockfish / supported UCI Elo baselines.
 - `rl_chess.modal_app`: the supported training/evaluation entrypoint for real runs on Modal.
 
@@ -33,13 +33,12 @@ uv run modal run src/rl_chess/modal_app.py --iterations 1 --max-plies 1 --simula
 Pilot checkpoint block sizing target:
 
 ```text
-self_play_games_per_checkpoint = 128
-parallel_workers = 32
-games_per_worker = 4
+parallel_workers = 8
+fresh_batch_games = 100
+train_updates_per_batch = 1
 mcts_simulations = 8
-batch_size = 512
-train_steps ≈ 125
-eval_every_checkpoint = true
+batch_size = 4096
+eval_after_run = true
 ```
 
 `--max-plies` is a safety cap, not a training truncation mechanism. If a game reaches the cap while non-terminal, the run raises instead of converting the unfinished game into a draw target. Omit the flag for uncapped self-play that runs until `python-chess` reports a terminal result.
@@ -128,3 +127,13 @@ uv run pytest -q
 - Training result: `games=16`, `terminal_games=16`, `examples=5348`, `updates=64`, latest loss `2.9693610668182373`; checkpoint `/checkpoints/random-eval-16train-12games-20260528-143441/iteration-0001.pt`.
 - Random validation: `games=12`, `wins=1`, `losses=0`, `draws=11`, `score=0.5416666666666666`, `passed=True`.
 - Interpretation: this clears the first weak baseline by avoiding losses and scoring just above 0.5, but most games are still draws; next methodology step should evaluate each checkpoint against random and improve decisiveness before treating Stockfish as the main signal.
+
+### 2026-05-28 22:58:04 UTC — Removed replay buffer and launched 10,000-game fresh-batch run
+
+- Methodology change: removed replay capacity/replay-size accounting from the training loop. Each iteration now freezes the latest model snapshot, generates a fresh parallel self-play batch from that snapshot, trains only on that batch, checkpoints, and then uses the updated model for the next batch.
+- Parallelism: added `--self-play-workers`; Modal training now requests `cpu=8` and uses worker-local model copies for self-play generation.
+- Verification: `uv run pytest -q` passed with `25 passed, 1 warning`.
+- Command: `uv run modal run src/rl_chess/modal_app.py --iterations 100 --games-per-iteration 100 --simulations 8 --train-steps 1 --batch-size 4096 --learning-rate 0.001 --temperature 1.0 --hidden-channels 64 --residual-blocks 4 --self-play-workers 8 --checkpoint-dir /checkpoints/fresh-batch-10000games-20260528-224952 --validate-random --validation-games 32 --validation-max-plies 200 --seed 20260528`
+- Modal run: https://modal.com/apps/koogle-frick/main/ap-C1zsRlZoKEZaWWggcZm9tR
+- Intended scale: `100` fresh batches × `100` games = `10,000` terminal self-play games, with one optimizer update per batch and final 32-game random-baseline validation.
+- Status at launch: running; final metrics and checkpoint paths should be appended when the Modal job completes.

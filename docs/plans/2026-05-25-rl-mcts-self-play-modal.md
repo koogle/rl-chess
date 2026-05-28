@@ -22,7 +22,7 @@ Build an inspectable AlphaGo-style chess loop: self-play uses PUCT search to imp
 - `src/rl_chess/nn_model.py` — policy/value model, board tensor encoding, policy/value loss.
 - `src/rl_chess/puct_mcts.py` — hand-written neural PUCT search.
 - `src/rl_chess/self_play.py` — MCTS-guided game collection.
-- `src/rl_chess/train.py` — replay-buffered training loop and checkpoint IO.
+- `src/rl_chess/train.py` — fresh-batch training loop and checkpoint IO.
 - `src/rl_chess/validation.py` — model-vs-baseline validation.
 - `src/rl_chess/modal_app.py` — Modal training/evaluation entrypoint.
 

@@ -6,7 +6,7 @@ from rl_chess.env import ChessEnv, ascii_to_board, board_to_ascii, result_to_whi
 from rl_chess.nn_model import PolicyValueNet, train_batch
 from rl_chess.puct_mcts import PUCTMCTS, PolicyValueEvaluator
 from rl_chess.self_play import TrainingExample, play_self_game, sample_policy
-from rl_chess.train import load_checkpoint_model, train
+from rl_chess.train import checkpoint_metrics, load_checkpoint_model, train
 from rl_chess.validation import (
     FixedMovePlayer,
     FirstLegalPlayer,
@@ -186,6 +186,71 @@ def test_training_metrics_do_not_report_truncation():
     assert len(metrics.loss_curve) == 2
 
 
+def test_training_uses_only_fresh_iteration_examples_for_updates(monkeypatch):
+    import importlib
+
+    train_module = importlib.import_module("rl_chess.train")
+
+    board = chess.Board()
+    first_iteration_example = TrainingExample(
+        state_ascii=board_to_ascii(board),
+        turn=board.turn,
+        policy_target={"e2e4": 1.0},
+        value_target=0.0,
+    )
+    second_iteration_example = TrainingExample(
+        state_ascii=board_to_ascii(board),
+        turn=board.turn,
+        policy_target={"d2d4": 1.0},
+        value_target=0.0,
+    )
+    generated = [first_iteration_example, first_iteration_example, second_iteration_example, second_iteration_example]
+    batches = []
+
+    def fake_play_self_game(*args, **kwargs):
+        example = generated.pop(0)
+        return train_module.SelfPlayGame(
+            examples=[example],
+            stats=train_module.GameStats(plies=1, result="1/2-1/2"),
+        )
+
+    def fake_train_batch(model, optimizer, batch):
+        batches.append([next(iter(example.policy_target)) for example in batch])
+        return train_module.TrainStats(total_loss=1.0, policy_loss=1.0, value_loss=0.0)
+
+    monkeypatch.setattr(train_module, "play_self_game", fake_play_self_game)
+    monkeypatch.setattr(train_module, "train_batch", fake_train_batch)
+
+    train(
+        model=PolicyValueNet(hidden_channels=8),
+        iterations=2,
+        games_per_iteration=2,
+        simulations=1,
+        train_steps=1,
+        batch_size=16,
+        self_play_workers=1,
+        seed=1,
+    )
+
+    assert batches == [["e2e4", "e2e4"], ["d2d4", "d2d4"]]
+
+
+def test_training_metrics_do_not_expose_replay_buffer():
+    metrics = train(
+        model=PolicyValueNet(hidden_channels=8),
+        iterations=1,
+        games_per_iteration=1,
+        simulations=2,
+        max_plies=1,
+        train_steps=1,
+        starting_board=ascii_to_board(KQK_BLACK_TO_MOVE, turn=chess.BLACK),
+        seed=3,
+    )
+
+    assert not hasattr(metrics, "replay_size")
+    assert checkpoint_metrics(metrics)["iteration_examples"] == 1
+
+
 def test_training_writes_iteration_checkpoints(tmp_path):
     model = PolicyValueNet(hidden_channels=8)
     metrics = train(
@@ -237,7 +302,7 @@ def test_training_rejects_invalid_public_knobs():
         {"max_plies": 0},
         {"train_steps": 0},
         {"batch_size": 0},
-        {"replay_capacity": 0},
+        {"self_play_workers": 0},
         {"learning_rate": 0.0},
         {"temperature": -1.0},
     ]
