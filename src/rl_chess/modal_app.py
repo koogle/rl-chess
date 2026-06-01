@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -152,6 +153,27 @@ def train_remote(
     return summary
 
 
+def _print_json(payload: dict[str, object]) -> None:
+    print(json.dumps(payload, sort_keys=True), flush=True)
+
+
+def _spawn_train(**kwargs: object) -> None:
+    function_call = train_remote.spawn(**kwargs)
+    _print_json(
+        {
+            "status": "spawned",
+            "function_call_id": function_call.object_id,
+            "dashboard_url": function_call.get_dashboard_url(),
+            "checkpoint_dir": kwargs.get("checkpoint_dir"),
+        }
+    )
+
+
+def _wait_for_train(function_call_id: str) -> None:
+    function_call = modal.FunctionCall.from_id(function_call_id)
+    _print_json(function_call.get())
+
+
 @app.local_entrypoint()
 def main(
     iterations: int = 10,
@@ -176,9 +198,9 @@ def main(
     starting_turn: str = "white",
     self_play_workers: int = 8,
     draw_value: float = 0.0,
+    wait: bool = False,
 ) -> None:
-    print(
-        train_remote.remote(
+    kwargs: dict[str, object] = dict(
             iterations=iterations,
             games_per_iteration=games_per_iteration,
             max_plies=max_plies,
@@ -201,5 +223,23 @@ def main(
             starting_turn=starting_turn,
             self_play_workers=self_play_workers,
             draw_value=draw_value,
-        )
     )
+    if wait:
+        function_call = train_remote.spawn(**kwargs)
+        _print_json(
+            {
+                "status": "spawned",
+                "function_call_id": function_call.object_id,
+                "dashboard_url": function_call.get_dashboard_url(),
+                "checkpoint_dir": checkpoint_dir,
+            }
+        )
+        _print_json(function_call.get())
+    else:
+        _spawn_train(**kwargs)
+
+
+@app.local_entrypoint()
+def result(function_call_id: str) -> None:
+    """Fetch and print the JSON result for a spawned Modal training call."""
+    _wait_for_train(function_call_id)
