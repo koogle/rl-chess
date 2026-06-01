@@ -32,6 +32,20 @@ def _jsonable_metrics(metrics: Any) -> dict[str, object]:
     }
 
 
+def _random_checkpoint_validation_summary(best_validation: Any | None) -> dict[str, object]:
+    if best_validation is None:
+        return {
+            "best_random_checkpoint": None,
+            "best_random_score": None,
+            "best_random_iteration": None,
+        }
+    return {
+        "best_random_checkpoint": str(best_validation.checkpoint_path),
+        "best_random_score": best_validation.score,
+        "best_random_iteration": best_validation.iteration,
+    }
+
+
 @app.function(image=image, timeout=24 * 60 * 60, cpu=8, volumes={str(CHECKPOINT_ROOT): checkpoint_volume})
 def train_remote(
     iterations: int = 10,
@@ -47,9 +61,12 @@ def train_remote(
     checkpoint_dir: str | None = None,
     validate_stockfish: bool = False,
     validate_random: bool = False,
+    validate_random_each_checkpoint: bool = False,
     stockfish_elo: int = 1320,
     validation_games: int = 2,
     validation_max_plies: int = 200,
+    checkpoint_validation_games: int | None = None,
+    checkpoint_validation_max_plies: int | None = None,
     stockfish_movetime: float = 0.05,
     seed: int | None = None,
     starting_board_ascii: str | None = None,
@@ -59,11 +76,27 @@ def train_remote(
     from rl_chess.env import ascii_to_board
     from rl_chess.nn_model import PolicyValueNet
     from rl_chess.train import train
-    from rl_chess.validation import validate_model_against_random, validate_model_against_stockfish
+    from rl_chess.validation import (
+        CheckpointRandomValidation,
+        append_checkpoint_random_validation,
+        best_checkpoint_random_validation,
+        validate_model_against_random,
+        validate_model_against_stockfish,
+    )
+
+    if validate_random_each_checkpoint and checkpoint_dir is None:
+        raise ValueError("validate_random_each_checkpoint requires checkpoint_dir")
+    per_checkpoint_games = checkpoint_validation_games or validation_games
+    per_checkpoint_max_plies = checkpoint_validation_max_plies or validation_max_plies
 
     model = PolicyValueNet(hidden_channels=hidden_channels, residual_blocks=residual_blocks)
+    best_random_validation: CheckpointRandomValidation | None = None
+    random_validation_jsonl = None if checkpoint_dir is None else Path(checkpoint_dir) / "random-validation.jsonl"
 
     def report_progress(progress: dict[str, object]) -> None:
+        nonlocal best_random_validation
+        checkpoint_path = Path(str(progress["checkpoint_path"]))
+        iteration = int(str(progress["iteration"]))
         print(
             "checkpoint_progress "
             + " ".join(
@@ -79,6 +112,39 @@ def train_remote(
             ),
             flush=True,
         )
+        if validate_random_each_checkpoint:
+            validation = validate_model_against_random(
+                model=model,
+                games=per_checkpoint_games,
+                max_plies=per_checkpoint_max_plies,
+                simulations=simulations,
+                seed=None if seed is None else seed + 1_000_000 + iteration,
+            )
+            checkpoint_validation = CheckpointRandomValidation.from_result(
+                iteration=iteration,
+                checkpoint_path=checkpoint_path,
+                result=validation,
+            )
+            if random_validation_jsonl is None:
+                raise RuntimeError("random validation JSONL path was not initialized")
+            append_checkpoint_random_validation(random_validation_jsonl, checkpoint_validation)
+            best_random_validation = best_checkpoint_random_validation(best_random_validation, checkpoint_validation)
+            print(
+                "checkpoint_random_validation "
+                + " ".join(
+                    [
+                        f"iteration={checkpoint_validation.iteration}",
+                        f"wins={checkpoint_validation.wins}",
+                        f"losses={checkpoint_validation.losses}",
+                        f"draws={checkpoint_validation.draws}",
+                        f"score={checkpoint_validation.score}",
+                        f"passed={checkpoint_validation.passed}",
+                        f"best_iteration={best_random_validation.iteration}",
+                        f"best_score={best_random_validation.score}",
+                    ]
+                ),
+                flush=True,
+            )
 
     metrics = train(
         model=model,
@@ -103,8 +169,13 @@ def train_remote(
             "residual_blocks": residual_blocks,
             "checkpoint_dir": checkpoint_dir,
             "self_play_workers": self_play_workers,
+            "validate_random_each_checkpoint": validate_random_each_checkpoint,
+            "checkpoint_validation_games": per_checkpoint_games if validate_random_each_checkpoint else None,
+            "checkpoint_validation_max_plies": per_checkpoint_max_plies if validate_random_each_checkpoint else None,
+            "random_validation_jsonl": str(random_validation_jsonl) if validate_random_each_checkpoint else None,
         }
     )
+    summary.update(_random_checkpoint_validation_summary(best_random_validation))
     if checkpoint_dir is not None:
         checkpoint_volume.commit()
     if validate_stockfish:
@@ -164,9 +235,12 @@ def main(
     checkpoint_dir: str | None = None,
     validate_stockfish: bool = False,
     validate_random: bool = False,
+    validate_random_each_checkpoint: bool = False,
     stockfish_elo: int = 1320,
     validation_games: int = 2,
     validation_max_plies: int = 200,
+    checkpoint_validation_games: int | None = None,
+    checkpoint_validation_max_plies: int | None = None,
     stockfish_movetime: float = 0.05,
     seed: int | None = None,
     starting_board_ascii: str | None = None,
@@ -188,9 +262,12 @@ def main(
             checkpoint_dir=checkpoint_dir,
             validate_stockfish=validate_stockfish,
             validate_random=validate_random,
+            validate_random_each_checkpoint=validate_random_each_checkpoint,
             stockfish_elo=stockfish_elo,
             validation_games=validation_games,
             validation_max_plies=validation_max_plies,
+            checkpoint_validation_games=checkpoint_validation_games,
+            checkpoint_validation_max_plies=checkpoint_validation_max_plies,
             stockfish_movetime=stockfish_movetime,
             seed=seed,
             starting_board_ascii=starting_board_ascii,

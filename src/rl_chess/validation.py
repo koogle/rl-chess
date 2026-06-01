@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import random
 import shutil
@@ -92,8 +93,67 @@ class ValidationResult:
         )
 
 
+@dataclass(frozen=True)
+class CheckpointRandomValidation:
+    iteration: int
+    checkpoint_path: Path
+    wins: int
+    losses: int
+    draws: int
+    score: float
+    passed: bool
+
+    @classmethod
+    def from_result(
+        cls,
+        *,
+        iteration: int,
+        checkpoint_path: str | Path,
+        result: ValidationResult,
+    ) -> CheckpointRandomValidation:
+        if iteration <= 0:
+            raise ValueError("iteration must be positive")
+        return cls(
+            iteration=iteration,
+            checkpoint_path=Path(checkpoint_path),
+            wins=result.wins,
+            losses=result.losses,
+            draws=result.draws,
+            score=result.score,
+            passed=result.passed,
+        )
+
+    def to_jsonable(self) -> dict[str, object]:
+        return {
+            "iteration": self.iteration,
+            "checkpoint_path": str(self.checkpoint_path),
+            "wins": self.wins,
+            "losses": self.losses,
+            "draws": self.draws,
+            "score": self.score,
+            "passed": self.passed,
+        }
+
+
+def append_checkpoint_random_validation(path: str | Path, validation: CheckpointRandomValidation) -> None:
+    jsonl_path = Path(path)
+    jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+    with jsonl_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(validation.to_jsonable(), sort_keys=True) + "\n")
+
+
+def best_checkpoint_random_validation(
+    current: CheckpointRandomValidation | None,
+    candidate: CheckpointRandomValidation,
+) -> CheckpointRandomValidation:
+    if current is None or candidate.score > current.score:
+        return candidate
+    return current
+
+
 @dataclass
 class FirstLegalPlayer:
+
     def select_move(self, board: chess.Board) -> chess.Move:
         return next(iter(board.legal_moves))
 

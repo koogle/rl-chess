@@ -1,3 +1,5 @@
+import json
+
 import chess
 import pytest
 import torch
@@ -12,6 +14,9 @@ from rl_chess.validation import (
     FirstLegalPlayer,
     RandomPlayer,
     ValidationResult,
+    append_checkpoint_random_validation,
+    best_checkpoint_random_validation,
+    CheckpointRandomValidation,
     play_validation_game,
     play_validation_match,
     resolve_stockfish_path,
@@ -291,6 +296,78 @@ def test_training_reports_progress_after_each_checkpoint(tmp_path):
     assert [item["checkpoint_path"].name for item in progress] == ["iteration-0001.pt", "iteration-0002.pt"]
     assert progress[-1]["games"] == 2
     assert progress[-1]["updates"] == 2
+
+
+def test_modal_remote_training_writes_checkpoint_random_validation_jsonl_and_best_summary(tmp_path, monkeypatch):
+    from rl_chess import modal_app
+    from rl_chess.modal_app import train_remote
+
+    class NoopVolume:
+        def commit(self):
+            pass
+
+    validations = [
+        ValidationResult(wins=0, losses=1, draws=1),
+        ValidationResult(wins=2, losses=0, draws=0),
+    ]
+
+    def fake_validate_model_against_random(**_kwargs):
+        return validations.pop(0)
+
+    monkeypatch.setattr(modal_app, "checkpoint_volume", NoopVolume())
+    monkeypatch.setattr("rl_chess.validation.validate_model_against_random", fake_validate_model_against_random)
+
+    summary = train_remote.local(
+        iterations=2,
+        games_per_iteration=1,
+        simulations=1,
+        max_plies=1,
+        train_steps=1,
+        batch_size=1,
+        hidden_channels=8,
+        residual_blocks=0,
+        checkpoint_dir=str(tmp_path),
+        validate_random_each_checkpoint=True,
+        checkpoint_validation_games=2,
+        checkpoint_validation_max_plies=3,
+        starting_board_ascii=KQK_BLACK_TO_MOVE,
+        starting_turn="black",
+        seed=7,
+        self_play_workers=1,
+    )
+
+    rows = [json.loads(line) for line in (tmp_path / "random-validation.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [row["iteration"] for row in rows] == [1, 2]
+    assert [row["wins"] for row in rows] == [0, 2]
+    assert rows[0]["checkpoint_path"].endswith("iteration-0001.pt")
+    assert rows[1]["score"] == 1.0
+    assert summary["best_random_iteration"] == 2
+    assert summary["best_random_score"] == 1.0
+    assert summary["best_random_checkpoint"].endswith("iteration-0002.pt")
+    assert summary["random_validation_jsonl"].endswith("random-validation.jsonl")
+    assert summary["checkpoint_validation_games"] == 2
+    assert summary["checkpoint_validation_max_plies"] == 3
+
+
+def test_checkpoint_random_validation_helpers_append_jsonl_and_keep_first_tie(tmp_path):
+    first = CheckpointRandomValidation.from_result(
+        iteration=1,
+        checkpoint_path=tmp_path / "iteration-0001.pt",
+        result=ValidationResult(wins=1, losses=0, draws=1),
+    )
+    tied = CheckpointRandomValidation.from_result(
+        iteration=2,
+        checkpoint_path=tmp_path / "iteration-0002.pt",
+        result=ValidationResult(wins=1, losses=0, draws=1),
+    )
+    jsonl = tmp_path / "random-validation.jsonl"
+
+    append_checkpoint_random_validation(jsonl, first)
+    append_checkpoint_random_validation(jsonl, tied)
+
+    assert best_checkpoint_random_validation(first, tied) is first
+    rows = [json.loads(line) for line in jsonl.read_text(encoding="utf-8").splitlines()]
+    assert rows == [first.to_jsonable(), tied.to_jsonable()]
 
 
 def test_training_rejects_invalid_public_knobs():

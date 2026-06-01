@@ -49,6 +49,12 @@ eval_after_run = true
 
 `--max-plies` is a safety cap, not a training truncation mechanism. If a game reaches the cap while non-terminal, the run raises instead of converting the unfinished game into a draw target. Omit the flag for uncapped self-play that runs until `python-chess` reports a terminal result.
 
+Checkpoint-by-checkpoint random validation is available for long fresh-batch runs. It validates immediately after each checkpoint is saved, appends one JSONL row per checkpoint to `<checkpoint-dir>/random-validation.jsonl`, and reports `best_random_checkpoint`, `best_random_score`, and `best_random_iteration` in the final summary:
+
+```bash
+uv run modal run --detach src/rl_chess/modal_app.py --iterations 100 --games-per-iteration 100 --simulations 8 --train-steps 1 --batch-size 4096 --learning-rate 0.001 --temperature 1.0 --hidden-channels 64 --residual-blocks 4 --self-play-workers 8 --checkpoint-dir /checkpoints/fresh-batch-10000games-checkpoint-eval-best-20260601 --validate-random-each-checkpoint --checkpoint-validation-games 32 --checkpoint-validation-max-plies 200 --validate-random --validation-games 32 --validation-max-plies 200 --seed 20260528
+```
+
 ## Tests
 
 ```bash
@@ -151,3 +157,11 @@ uv run pytest -q
 
 - Operational change: real/non-smoke Modal training runs should use `uv run modal run --detach ...` so the app keeps running if the local client disconnects; tiny smoke runs can remain attached for quick feedback.
 - Reason: the 10,000-game run completed and persisted checkpoints, but the attached local client later emitted repeated log-continuity warnings and was killed locally after completion.
+
+### 2026-06-01 01:06:40 UTC — Added checkpoint-by-checkpoint random validation for fresh-batch runs
+
+- Branch experiment: `exp/checkpoint-eval-best` adds per-checkpoint random validation so a long fresh-batch run records strength over time instead of only judging the final checkpoint.
+- Methodology change: `--validate-random-each-checkpoint` evaluates the just-saved checkpoint model against random, appends one JSONL row to `<checkpoint-dir>/random-validation.jsonl` with iteration, checkpoint path, W/L/D, score, and pass/fail, and tracks `best_random_checkpoint`, `best_random_score`, and `best_random_iteration` in the final Modal summary.
+- Proposed detached 10,000-game command: `uv run modal run --detach src/rl_chess/modal_app.py --iterations 100 --games-per-iteration 100 --simulations 8 --train-steps 1 --batch-size 4096 --learning-rate 0.001 --temperature 1.0 --hidden-channels 64 --residual-blocks 4 --self-play-workers 8 --checkpoint-dir /checkpoints/fresh-batch-10000games-checkpoint-eval-best-20260601 --validate-random-each-checkpoint --checkpoint-validation-games 32 --checkpoint-validation-max-plies 200 --validate-random --validation-games 32 --validation-max-plies 200 --seed 20260528`
+- Expected artifacts: checkpoints plus `/checkpoints/fresh-batch-10000games-checkpoint-eval-best-20260601/random-validation.jsonl` in the Modal checkpoint volume.
+- Interpretation: this preserves visibility into earlier checkpoints if later training regresses below random, while leaving the Modal runner as a thin wrapper around core training and validation helpers.
