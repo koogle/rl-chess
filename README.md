@@ -44,6 +44,8 @@ Fetch a spawned run's final JSON result later with:
 uv run modal run src/rl_chess/modal_app.py::result --function-call-id <fc-...>
 ```
 
+When `--checkpoint-dir` is set, the remote function also writes `/checkpoints/<run-id>/summary.json` after final validation and commits it to the Modal volume. Always retrieve and report those final evaluation fields back to the user when a run finishes.
+
 Pilot checkpoint block sizing target for `exp/more-updates`:
 
 ```text

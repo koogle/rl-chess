@@ -109,8 +109,6 @@ def train_remote(
             "fresh_batch_epochs": fresh_batch_epochs,
         }
     )
-    if checkpoint_dir is not None:
-        checkpoint_volume.commit()
     if validate_stockfish:
         validation = validate_model_against_stockfish(
             model=model,
@@ -150,7 +148,16 @@ def train_remote(
                 "random_validation_passed": validation.passed,
             }
         )
+    _persist_summary(checkpoint_dir, summary)
     return summary
+
+
+def _persist_summary(checkpoint_dir: str | None, summary: dict[str, object]) -> None:
+    if checkpoint_dir is None:
+        return
+    summary_path = Path(checkpoint_dir) / "summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+    checkpoint_volume.commit()
 
 
 def _print_json(payload: dict[str, object]) -> None:
