@@ -117,6 +117,7 @@ def test_modal_remote_training_accepts_ascii_starting_board():
     assert summary["games"] == 1
     assert summary["hidden_channels"] == 8
     assert summary["residual_blocks"] == 0
+    assert summary["fresh_batch_epochs"] == 1
 
 
 def test_policy_value_trainer_reduces_loss_on_repeated_target():
@@ -227,12 +228,64 @@ def test_training_uses_only_fresh_iteration_examples_for_updates(monkeypatch):
         games_per_iteration=2,
         simulations=1,
         train_steps=1,
+        fresh_batch_epochs=2,
         batch_size=16,
         self_play_workers=1,
         seed=1,
     )
 
-    assert batches == [["e2e4", "e2e4"], ["d2d4", "d2d4"]]
+    assert batches == [["e2e4", "e2e4"], ["e2e4", "e2e4"], ["d2d4", "d2d4"], ["d2d4", "d2d4"]]
+
+
+def test_fresh_batch_epoch_mode_trains_expected_minibatches(monkeypatch):
+    import importlib
+
+    train_module = importlib.import_module("rl_chess.train")
+
+    board = chess.Board()
+    moves = ["e2e4", "d2d4", "c2c4"]
+    generated = [
+        TrainingExample(
+            state_ascii=board_to_ascii(board),
+            turn=board.turn,
+            policy_target={move: 1.0},
+            value_target=0.0,
+        )
+        for move in moves
+    ]
+    batches = []
+
+    def fake_play_self_game(*args, **kwargs):
+        return train_module.SelfPlayGame(
+            examples=[generated.pop(0)],
+            stats=train_module.GameStats(plies=1, result="1/2-1/2"),
+        )
+
+    def fake_train_batch(model, optimizer, batch):
+        batches.append([next(iter(example.policy_target)) for example in batch])
+        return train_module.TrainStats(total_loss=1.0, policy_loss=1.0, value_loss=0.0)
+
+    monkeypatch.setattr(train_module, "play_self_game", fake_play_self_game)
+    monkeypatch.setattr(train_module, "train_batch", fake_train_batch)
+
+    metrics = train(
+        model=PolicyValueNet(hidden_channels=8),
+        iterations=1,
+        games_per_iteration=3,
+        simulations=1,
+        train_steps=1,
+        fresh_batch_epochs=2,
+        batch_size=2,
+        self_play_workers=1,
+        seed=2,
+    )
+
+    assert len(batches) == 4
+    assert [len(batch) for batch in batches] == [2, 1, 2, 1]
+    assert sorted(move for batch in batches[:2] for move in batch) == sorted(moves)
+    assert sorted(move for batch in batches[2:] for move in batch) == sorted(moves)
+    assert sorted(move for batch in batches for move in batch) == sorted(moves * 2)
+    assert len(metrics.loss_curve) == 4
 
 
 def test_training_metrics_do_not_expose_replay_buffer():
@@ -301,6 +354,7 @@ def test_training_rejects_invalid_public_knobs():
         {"simulations": 0},
         {"max_plies": 0},
         {"train_steps": 0},
+        {"fresh_batch_epochs": 0},
         {"batch_size": 0},
         {"self_play_workers": 0},
         {"learning_rate": 0.0},

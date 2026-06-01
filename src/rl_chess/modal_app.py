@@ -39,6 +39,7 @@ def train_remote(
     max_plies: int | None = None,
     simulations: int = 64,
     train_steps: int = 1,
+    fresh_batch_epochs: int = 1,
     batch_size: int = 64,
     learning_rate: float = 1e-3,
     temperature: float = 1.0,
@@ -87,6 +88,7 @@ def train_remote(
         simulations=simulations,
         max_plies=max_plies,
         train_steps=train_steps,
+        fresh_batch_epochs=fresh_batch_epochs,
         batch_size=batch_size,
         learning_rate=learning_rate,
         temperature=temperature,
@@ -103,6 +105,7 @@ def train_remote(
             "residual_blocks": residual_blocks,
             "checkpoint_dir": checkpoint_dir,
             "self_play_workers": self_play_workers,
+            "fresh_batch_epochs": fresh_batch_epochs,
         }
     )
     if checkpoint_dir is not None:
@@ -156,6 +159,7 @@ def main(
     max_plies: int | None = None,
     simulations: int = 64,
     train_steps: int = 1,
+    fresh_batch_epochs: int = 1,
     batch_size: int = 64,
     learning_rate: float = 1e-3,
     temperature: float = 1.0,
@@ -180,6 +184,7 @@ def main(
             max_plies=max_plies,
             simulations=simulations,
             train_steps=train_steps,
+            fresh_batch_epochs=fresh_batch_epochs,
             batch_size=batch_size,
             learning_rate=learning_rate,
             temperature=temperature,

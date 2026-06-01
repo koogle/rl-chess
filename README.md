@@ -36,15 +36,22 @@ Real/non-smoke Modal training runs should be detached so the remote app keeps ru
 uv run modal run --detach src/rl_chess/modal_app.py <training flags>
 ```
 
-Pilot checkpoint block sizing target:
+Pilot checkpoint block sizing target for `exp/more-updates`:
 
 ```text
 parallel_workers = 8
 fresh_batch_games = 100
-train_updates_per_batch = 1
+fresh_batch_epochs = 4
+batch_size = 1024
+train_steps = 1  # minimum update count; epoch minibatches usually exceed it
 mcts_simulations = 8
-batch_size = 4096
 eval_after_run = true
+```
+
+Proposed 10,000-game detached branch experiment:
+
+```bash
+uv run modal run --detach src/rl_chess/modal_app.py --iterations 100 --games-per-iteration 100 --simulations 8 --train-steps 1 --fresh-batch-epochs 4 --batch-size 1024 --learning-rate 0.001 --temperature 1.0 --hidden-channels 64 --residual-blocks 4 --self-play-workers 8 --checkpoint-dir /checkpoints/fresh-batch-more-updates-10000games-20260601 --validate-random --validation-games 32 --validation-max-plies 200 --seed 20260601
 ```
 
 `--max-plies` is a safety cap, not a training truncation mechanism. If a game reaches the cap while non-terminal, the run raises instead of converting the unfinished game into a draw target. Omit the flag for uncapped self-play that runs until `python-chess` reports a terminal result.
@@ -151,3 +158,11 @@ uv run pytest -q
 
 - Operational change: real/non-smoke Modal training runs should use `uv run modal run --detach ...` so the app keeps running if the local client disconnects; tiny smoke runs can remain attached for quick feedback.
 - Reason: the 10,000-game run completed and persisted checkpoints, but the attached local client later emitted repeated log-continuity warnings and was killed locally after completion.
+
+### 2026-06-01 01:06:04 UTC — Added fresh-batch epoch/minibatch training mode
+
+- Methodology change: added `fresh_batch_epochs` so each iteration trains over shuffled minibatches of the current fresh self-play batch for multiple coherent epochs, without retaining or sampling older iteration examples.
+- Update semantics: actual optimizer updates per iteration are the larger of `train_steps` and `ceil(iteration_examples / batch_size) * fresh_batch_epochs`; if `train_steps` is larger, additional shuffled passes over only the same fresh batch are appended. Progress and loss curves still report actual optimizer updates.
+- Proposed detached 10,000-game branch command: `uv run modal run --detach src/rl_chess/modal_app.py --iterations 100 --games-per-iteration 100 --simulations 8 --train-steps 1 --fresh-batch-epochs 4 --batch-size 1024 --learning-rate 0.001 --temperature 1.0 --hidden-channels 64 --residual-blocks 4 --self-play-workers 8 --checkpoint-dir /checkpoints/fresh-batch-more-updates-10000games-20260601 --validate-random --validation-games 32 --validation-max-plies 200 --seed 20260601`
+- Verification: `uv run pytest -q` passed with `26 passed, 1 warning`.
+- Intended scale: keeps the previous `100 × 100 = 10,000` terminal-game fresh-batch design, but replaces one full/random update per batch with roughly four complete minibatch passes over each fresh batch.

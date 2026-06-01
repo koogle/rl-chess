@@ -153,6 +153,44 @@ def generate_self_play_batch(
     return ordered
 
 
+def _fresh_epoch_minibatches(
+    fresh_examples: Sequence[TrainingExample],
+    batch_size: int,
+    fresh_batch_epochs: int,
+    train_steps: int,
+    rng: random.Random,
+) -> list[list[TrainingExample]]:
+    """Return shuffled minibatches drawn only from the current fresh batch.
+
+    ``fresh_batch_epochs`` controls coherent passes over the whole fresh batch: each
+    example appears exactly once per epoch, split into minibatches of at most
+    ``batch_size``. ``train_steps`` is retained as a minimum optimizer-update count;
+    if it exceeds the requested epoch minibatches, extra shuffled fresh-batch passes
+    are appended and truncated at ``train_steps`` updates. No examples from prior
+    iterations are retained or sampled.
+    """
+
+    if not fresh_examples:
+        return []
+
+    batches: list[list[TrainingExample]] = []
+
+    def append_epoch() -> None:
+        epoch_examples = list(fresh_examples)
+        rng.shuffle(epoch_examples)
+        for start in range(0, len(epoch_examples), batch_size):
+            batches.append(epoch_examples[start : start + batch_size])
+
+    for _ in range(fresh_batch_epochs):
+        append_epoch()
+
+    target_updates = max(train_steps, len(batches))
+    while len(batches) < target_updates:
+        append_epoch()
+
+    return batches[:target_updates]
+
+
 def train(
     model: PolicyValueNet,
     iterations: int,
@@ -160,6 +198,7 @@ def train(
     simulations: int = 64,
     max_plies: int | None = None,
     train_steps: int = 1,
+    fresh_batch_epochs: int = 1,
     batch_size: int = 64,
     learning_rate: float = 1e-3,
     temperature: float = 1.0,
@@ -179,6 +218,8 @@ def train(
         raise ValueError("max_plies must be positive or None")
     if train_steps <= 0:
         raise ValueError("train_steps must be positive")
+    if fresh_batch_epochs <= 0:
+        raise ValueError("fresh_batch_epochs must be positive")
     if batch_size <= 0:
         raise ValueError("batch_size must be positive")
     if learning_rate <= 0:
@@ -217,10 +258,13 @@ def train(
         examples += latest_iteration_examples
         terminal_games += len(games)
 
-        for _ in range(train_steps):
-            if not fresh_examples:
-                continue
-            batch = rng.sample(fresh_examples, k=min(batch_size, len(fresh_examples)))
+        for batch in _fresh_epoch_minibatches(
+            fresh_examples=fresh_examples,
+            batch_size=batch_size,
+            fresh_batch_epochs=fresh_batch_epochs,
+            train_steps=train_steps,
+            rng=rng,
+        ):
             stats = train_batch(model, optimizer, batch)
             losses.append(stats.total_loss)
             policy_losses.append(stats.policy_loss)
