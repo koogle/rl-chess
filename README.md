@@ -30,6 +30,12 @@ Tiny smoke run:
 uv run modal run src/rl_chess/modal_app.py --iterations 1 --max-plies 1 --simulations 2 --seed 123
 ```
 
+Real/non-smoke Modal training runs should be detached so the remote app keeps running even if the local log-streaming client disconnects:
+
+```bash
+uv run modal run --detach src/rl_chess/modal_app.py <training flags>
+```
+
 Pilot checkpoint block sizing target:
 
 ```text
@@ -140,3 +146,8 @@ uv run pytest -q
 - Final checkpoint metrics: `iterations=100`, `games=10000`, `terminal_games=10000`, `examples=366527`, `iteration_examples=2120`, `updates=100`; loss moved from `3.0997283458709717` to `0.20128056406974792`.
 - Final 32-game random validation rerun from downloaded `iteration-0100.pt`: `wins=0`, `losses=3`, `draws=29`, `score=0.453125`, `passed=False`.
 - Interpretation: the 10,000-game fresh-batch run completed and fit its self-play targets strongly, but the final checkpoint regressed below the random baseline. The next fix should not be “more games” blindly; investigate why fresh-batch training is converging toward draw/loss behavior, likely by adding checkpoint-by-checkpoint random validation and improving update frequency/target quality.
+
+### 2026-06-01 00:57:49 UTC — Detached Modal launch convention for real runs
+
+- Operational change: real/non-smoke Modal training runs should use `uv run modal run --detach ...` so the app keeps running if the local client disconnects; tiny smoke runs can remain attached for quick feedback.
+- Reason: the 10,000-game run completed and persisted checkpoints, but the attached local client later emitted repeated log-continuity warnings and was killed locally after completion.

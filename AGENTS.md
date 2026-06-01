@@ -25,4 +25,5 @@ For every entry:
 
 - Run `uv run pytest -q` before committing code changes.
 - For training/validation changes, also run the smallest relevant smoke command before larger remote runs.
+- Launch real/non-smoke Modal training runs with `modal run --detach` so the remote app is not stopped if the local log-streaming client disconnects. Tiny smoke runs may stay attached for immediate feedback.
 - Record all verification in the README research log.
