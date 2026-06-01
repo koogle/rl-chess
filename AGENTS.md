@@ -26,4 +26,4 @@ For every entry:
 - Run `uv run pytest -q` before committing code changes.
 - For training/validation changes, also run the smallest relevant smoke command before larger remote runs.
 - Launch real/non-smoke Modal training through the spawn-based local entrypoint: `uv run modal run src/rl_chess/modal_app.py::main <training flags>`. The entrypoint calls `train_remote.spawn(...)`, prints a JSON payload with `function_call_id` and `dashboard_url`, then exits so the remote function continues independently. Add `--wait` only for tiny smoke runs where immediate feedback is more useful than durable handoff.
-- Record all verification in the README research log.
+- Record all verification in the README research log. Always return final evaluation results to the user when Modal runs finish.
