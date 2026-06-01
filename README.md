@@ -136,4 +136,7 @@ uv run pytest -q
 - Command: `uv run modal run src/rl_chess/modal_app.py --iterations 100 --games-per-iteration 100 --simulations 8 --train-steps 1 --batch-size 4096 --learning-rate 0.001 --temperature 1.0 --hidden-channels 64 --residual-blocks 4 --self-play-workers 8 --checkpoint-dir /checkpoints/fresh-batch-10000games-20260528-224952 --validate-random --validation-games 32 --validation-max-plies 200 --seed 20260528`
 - Modal run: https://modal.com/apps/koogle-frick/main/ap-C1zsRlZoKEZaWWggcZm9tR
 - Intended scale: `100` fresh batches × `100` games = `10,000` terminal self-play games, with one optimizer update per batch and final 32-game random-baseline validation.
-- Status at launch: running; final metrics and checkpoint paths should be appended when the Modal job completes.
+- Completion checked 2026-06-01 00:49:45 UTC: Modal showed zero active tasks and the checkpoint volume contained all 100 checkpoints through `/checkpoints/fresh-batch-10000games-20260528-224952/iteration-0100.pt`.
+- Final checkpoint metrics: `iterations=100`, `games=10000`, `terminal_games=10000`, `examples=366527`, `iteration_examples=2120`, `updates=100`; loss moved from `3.0997283458709717` to `0.20128056406974792`.
+- Final 32-game random validation rerun from downloaded `iteration-0100.pt`: `wins=0`, `losses=3`, `draws=29`, `score=0.453125`, `passed=False`.
+- Interpretation: the 10,000-game fresh-batch run completed and fit its self-play targets strongly, but the final checkpoint regressed below the random baseline. The next fix should not be “more games” blindly; investigate why fresh-batch training is converging toward draw/loss behavior, likely by adding checkpoint-by-checkpoint random validation and improving update frequency/target quality.
