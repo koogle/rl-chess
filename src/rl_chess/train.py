@@ -11,7 +11,7 @@ import chess
 import torch
 
 from rl_chess.nn_model import PolicyValueNet, TrainStats, train_batch
-from rl_chess.self_play import GameStats, SelfPlayGame, TrainingExample, play_self_game
+from rl_chess.self_play import GameStats, SelfPlayGame, TrainingExample, play_self_game, validate_draw_value
 
 
 @dataclass(frozen=True)
@@ -79,6 +79,7 @@ def _play_chunk(
     max_plies: int | None,
     temperature: float,
     starting_board: chess.Board | None,
+    draw_value: float,
 ) -> list[SelfPlayGame]:
     worker_model = PolicyValueNet(hidden_channels=hidden_channels, residual_blocks=residual_blocks)
     worker_model.load_state_dict(state_dict)
@@ -91,6 +92,7 @@ def _play_chunk(
             temperature=temperature,
             seed=game_seed,
             starting_board=starting_board,
+            draw_value=draw_value,
         )
         for game_seed in seeds
     ]
@@ -105,6 +107,7 @@ def generate_self_play_batch(
     seed_offset: int | None,
     starting_board: chess.Board | None = None,
     self_play_workers: int = 1,
+    draw_value: float = 0.0,
 ) -> list[SelfPlayGame]:
     """Generate one fresh self-play batch from a frozen snapshot of the latest model."""
 
@@ -112,6 +115,7 @@ def generate_self_play_batch(
         raise ValueError("games must be positive")
     if self_play_workers <= 0:
         raise ValueError("self_play_workers must be positive")
+    draw_value = validate_draw_value(draw_value)
 
     seeds = [None if seed_offset is None else seed_offset + game_idx for game_idx in range(games)]
     if self_play_workers == 1 or games == 1:
@@ -123,6 +127,7 @@ def generate_self_play_batch(
                 temperature=temperature,
                 seed=game_seed,
                 starting_board=starting_board,
+                draw_value=draw_value,
             )
             for game_seed in seeds
         ]
@@ -141,6 +146,7 @@ def generate_self_play_batch(
                 max_plies=max_plies,
                 temperature=temperature,
                 starting_board=starting_board,
+                draw_value=draw_value,
             ),
             chunks,
         )
@@ -167,6 +173,7 @@ def train(
     checkpoint_dir: str | Path | None = None,
     starting_board: Any | None = None,
     self_play_workers: int = 1,
+    draw_value: float = 0.0,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> TrainMetrics:
     if iterations <= 0:
@@ -187,6 +194,7 @@ def train(
         raise ValueError("temperature must be non-negative")
     if self_play_workers <= 0:
         raise ValueError("self_play_workers must be positive")
+    draw_value = validate_draw_value(draw_value)
 
     if seed is not None:
         torch.manual_seed(seed)
@@ -211,6 +219,7 @@ def train(
             seed_offset=seed_offset,
             starting_board=starting_board,
             self_play_workers=self_play_workers,
+            draw_value=draw_value,
         )
         fresh_examples = [example for game in games for example in game.examples]
         latest_iteration_examples = len(fresh_examples)

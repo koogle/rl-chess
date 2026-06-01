@@ -48,6 +48,14 @@ class SelfPlayGame:
     stats: GameStats
 
 
+def validate_draw_value(draw_value: float) -> float:
+    """Validate the actor-perspective value target used for drawn self-play games."""
+
+    if not -1.0 <= draw_value <= 1.0:
+        raise ValueError("draw_value must be in [-1, 1]")
+    return draw_value
+
+
 def play_self_game(
     model_evaluator: PolicyValueEvaluator,
     simulations: int = 64,
@@ -55,16 +63,23 @@ def play_self_game(
     temperature: float = 1.0,
     seed: int | None = None,
     starting_board: chess.Board | None = None,
+    draw_value: float = 0.0,
 ) -> SelfPlayGame:
     """Generate one NN-guided PUCT self-play game.
 
     Games always play until python-chess says the position is terminal. A
     `max_plies` value is only a safety guard: reaching it on a non-terminal game
     raises instead of turning an incomplete game into a draw target.
+
+    `draw_value` is optional training-target shaping for self-play draws. The
+    default `0.0` preserves normal chess result targets; experimental negative
+    values (for example `-0.05`) make every actor in a drawn game receive that
+    small actor-perspective value target.
     """
 
     if max_plies is not None and max_plies <= 0:
         raise ValueError("max_plies must be positive or None")
+    draw_value = validate_draw_value(draw_value)
 
     board = starting_board.copy(stack=False) if starting_board is not None else chess.Board()
     rng = random.Random(seed)
@@ -84,12 +99,18 @@ def play_self_game(
 
     result = board.result(claim_draw=True)
     white_reward = result_to_white_reward(result)
+
+    def actor_value(turn: bool) -> float:
+        if result == "1/2-1/2":
+            return draw_value
+        return white_reward if turn == chess.WHITE else -white_reward
+
     examples = [
         TrainingExample(
             state_ascii=state_ascii,
             turn=turn,
             policy_target=policy,
-            value_target=white_reward if turn == chess.WHITE else -white_reward,
+            value_target=actor_value(turn),
         )
         for state_ascii, turn, policy in pending
     ]

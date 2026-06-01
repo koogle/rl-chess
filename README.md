@@ -49,6 +49,14 @@ eval_after_run = true
 
 `--max-plies` is a safety cap, not a training truncation mechanism. If a game reaches the cap while non-terminal, the run raises instead of converting the unfinished game into a draw target. Omit the flag for uncapped self-play that runs until `python-chess` reports a terminal result.
 
+Experiment branch `exp/decisive-draw-penalty` adds `--draw-value` as optional self-play training target shaping. The default `0.0` preserves normal draw targets; a small negative value such as `-0.05` makes drawn games train every actor toward that value while leaving wins/losses at actor-perspective `±1`. This is an experiment to discourage safe-draw convergence, not a change to chess result truth.
+
+Proposed detached 10,000-game decisive-draw-penalty run for this branch:
+
+```bash
+uv run modal run --detach src/rl_chess/modal_app.py --iterations 100 --games-per-iteration 100 --simulations 8 --train-steps 1 --batch-size 4096 --learning-rate 0.001 --temperature 1.0 --hidden-channels 64 --residual-blocks 4 --self-play-workers 8 --draw-value -0.05 --checkpoint-dir /checkpoints/decisive-draw-penalty-10000games-20260601 --validate-random --validation-games 32 --validation-max-plies 200 --seed 20260601
+```
+
 ## Tests
 
 ```bash
@@ -151,3 +159,9 @@ uv run pytest -q
 
 - Operational change: real/non-smoke Modal training runs should use `uv run modal run --detach ...` so the app keeps running if the local client disconnects; tiny smoke runs can remain attached for quick feedback.
 - Reason: the 10,000-game run completed and persisted checkpoints, but the attached local client later emitted repeated log-continuity warnings and was killed locally after completion.
+
+### 2026-06-01 01:05:04 UTC — Decisive draw-value penalty experiment branch
+
+- Methodology change: added optional `draw_value` self-play training-target shaping through core self-play, batch generation, training, and the Modal CLI. Default `0.0` preserves existing draw targets; configured values are validated in `[-1, 1]` and only affect terminal `1/2-1/2` examples, assigning the same actor-perspective value to both sides while decisive results stay `±1`.
+- Proposed detached 10,000-game branch command: `uv run modal run --detach src/rl_chess/modal_app.py --iterations 100 --games-per-iteration 100 --simulations 8 --train-steps 1 --batch-size 4096 --learning-rate 0.001 --temperature 1.0 --hidden-channels 64 --residual-blocks 4 --self-play-workers 8 --draw-value -0.05 --checkpoint-dir /checkpoints/decisive-draw-penalty-10000games-20260601 --validate-random --validation-games 32 --validation-max-plies 200 --seed 20260601`
+- Status: branch implementation only; the full Modal run has not been launched. Verification: `uv run pytest -q` passed with `28 passed, 1 warning`.

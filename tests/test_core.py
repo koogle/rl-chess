@@ -18,6 +18,20 @@ from rl_chess.validation import (
     stockfish_strength_config,
 )
 
+
+def draw_in_one_board() -> chess.Board:
+    board = chess.Board(None)
+    board.set_piece_at(chess.A1, chess.Piece(chess.KING, chess.WHITE))
+    board.set_piece_at(chess.A2, chess.Piece(chess.KNIGHT, chess.WHITE))
+    board.set_piece_at(chess.H7, chess.Piece(chess.QUEEN, chess.WHITE))
+    board.set_piece_at(chess.H8, chess.Piece(chess.KING, chess.BLACK))
+    board.turn = chess.BLACK
+    assert board.is_valid()
+    assert not board.is_game_over(claim_draw=True)
+    assert [move.uci() for move in board.legal_moves] == ["h8h7"]
+    return board
+
+
 KQK_BLACK_TO_MOVE = """  a b c d e f g h
 8 . . . . . . . . 8
 7 . . . . . . . . 7
@@ -47,6 +61,18 @@ class E4Evaluator(PolicyValueEvaluator):
         priors = {move.uci(): 1.0 for move in board.legal_moves}
         if "e2e4" in priors:
             priors["e2e4"] = 100.0
+        total = sum(priors.values())
+        return {move: weight / total for move, weight in priors.items()}, 0.0
+
+
+class PreferredMoveEvaluator(PolicyValueEvaluator):
+    def __init__(self, preferred_move: str):
+        self.preferred_move = preferred_move
+
+    def evaluate(self, board: chess.Board) -> tuple[dict[str, float], float]:
+        priors = {move.uci(): 1.0 for move in board.legal_moves}
+        if self.preferred_move in priors:
+            priors[self.preferred_move] = 100.0
         total = sum(priors.values())
         return {move: weight / total for move, weight in priors.items()}, 0.0
 
@@ -111,12 +137,14 @@ def test_modal_remote_training_accepts_ascii_starting_board():
         residual_blocks=0,
         starting_board_ascii=KQK_BLACK_TO_MOVE,
         starting_turn="black",
+        draw_value=-0.05,
         seed=1,
     )
     assert summary["loop"] == "nn-puct"
     assert summary["games"] == 1
     assert summary["hidden_channels"] == 8
     assert summary["residual_blocks"] == 0
+    assert summary["draw_value"] == -0.05
 
 
 def test_policy_value_trainer_reduces_loss_on_repeated_target():
@@ -165,6 +193,42 @@ def test_self_play_can_be_uncapped_until_terminal_from_mate_in_one():
 def test_self_play_rejects_safety_cap_instead_of_truncating_game():
     with pytest.raises(RuntimeError, match="non-terminal self-play game reached safety cap"):
         play_self_game(E4Evaluator(), simulations=1, max_plies=1, seed=3)
+
+
+def test_self_play_default_draw_value_keeps_draw_targets_zero():
+    game = play_self_game(E4Evaluator(), simulations=1, temperature=0, starting_board=draw_in_one_board(), seed=1)
+
+    assert game.stats.result == "1/2-1/2"
+    assert [example.value_target for example in game.examples] == [0.0]
+
+
+def test_self_play_configured_draw_value_shapes_all_draw_targets_from_actor_perspective():
+    game = play_self_game(
+        E4Evaluator(),
+        simulations=1,
+        temperature=0,
+        starting_board=draw_in_one_board(),
+        draw_value=-0.05,
+        seed=1,
+    )
+
+    assert game.stats.result == "1/2-1/2"
+    assert [example.turn for example in game.examples] == [chess.BLACK]
+    assert [example.value_target for example in game.examples] == [-0.05]
+
+
+def test_self_play_draw_value_does_not_change_decisive_targets():
+    game = play_self_game(
+        PreferredMoveEvaluator("h7g7"),
+        simulations=1,
+        temperature=0,
+        starting_board=ascii_to_board(MATE_IN_ONE, turn=chess.WHITE),
+        draw_value=-0.05,
+        seed=1,
+    )
+
+    assert game.stats.result == "1-0"
+    assert [example.value_target for example in game.examples] == [1.0]
 
 
 def test_training_metrics_do_not_report_truncation():
@@ -305,6 +369,8 @@ def test_training_rejects_invalid_public_knobs():
         {"self_play_workers": 0},
         {"learning_rate": 0.0},
         {"temperature": -1.0},
+        {"draw_value": -1.01},
+        {"draw_value": 1.01},
     ]
     for kwargs in bad_configs:
         params = {"iterations": 1, **kwargs}

@@ -55,6 +55,7 @@ def train_remote(
     starting_board_ascii: str | None = None,
     starting_turn: str = "white",
     self_play_workers: int = 8,
+    draw_value: float = 0.0,
 ) -> dict[str, object]:
     from rl_chess.env import ascii_to_board
     from rl_chess.nn_model import PolicyValueNet
@@ -94,6 +95,7 @@ def train_remote(
         checkpoint_dir=checkpoint_dir,
         starting_board=None if starting_board_ascii is None else ascii_to_board(starting_board_ascii, starting_turn == "white"),
         self_play_workers=self_play_workers,
+        draw_value=draw_value,
         progress_callback=report_progress if checkpoint_dir is not None else None,
     )
     summary = _jsonable_metrics(metrics)
@@ -103,6 +105,7 @@ def train_remote(
             "residual_blocks": residual_blocks,
             "checkpoint_dir": checkpoint_dir,
             "self_play_workers": self_play_workers,
+            "draw_value": draw_value,
         }
     )
     if checkpoint_dir is not None:
@@ -172,6 +175,7 @@ def main(
     starting_board_ascii: str | None = None,
     starting_turn: str = "white",
     self_play_workers: int = 8,
+    draw_value: float = 0.0,
 ) -> None:
     print(
         train_remote.remote(
@@ -196,5 +200,6 @@ def main(
             starting_board_ascii=starting_board_ascii,
             starting_turn=starting_turn,
             self_play_workers=self_play_workers,
+            draw_value=draw_value,
         )
     )
