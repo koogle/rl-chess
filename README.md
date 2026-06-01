@@ -26,14 +26,22 @@ See `docs/alphago-from-scratch-lessons.md` for the Dwarkesh/Eric Jang AlphaGo-fr
 
 Tiny smoke run:
 
+Quick smoke runs can wait for their result by passing `--wait`:
+
 ```bash
-uv run modal run src/rl_chess/modal_app.py --iterations 1 --max-plies 1 --simulations 2 --seed 123
+uv run modal run src/rl_chess/modal_app.py::main --iterations 1 --max-plies 1 --simulations 2 --seed 123 --wait
 ```
 
-Real/non-smoke Modal training runs should be detached so the remote app keeps running even if the local log-streaming client disconnects:
+Real/non-smoke Modal training runs use the default spawn-based handoff. The local entrypoint calls `train_remote.spawn(...)`, prints JSON containing `function_call_id`, `dashboard_url`, and `checkpoint_dir`, then exits while the Modal function continues independently:
 
 ```bash
-uv run modal run --detach src/rl_chess/modal_app.py <training flags>
+uv run modal run src/rl_chess/modal_app.py::main <training flags>
+```
+
+Fetch a spawned run's final JSON result later with:
+
+```bash
+uv run modal run src/rl_chess/modal_app.py::result --function-call-id <fc-...>
 ```
 
 Pilot checkpoint block sizing target:
