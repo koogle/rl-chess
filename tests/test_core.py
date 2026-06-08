@@ -2,7 +2,7 @@ import chess
 import pytest
 import torch
 
-from rl_chess.env import ChessEnv, ascii_to_board, board_to_ascii, result_to_white_reward
+from rl_chess.env import ascii_to_board, board_to_ascii, result_to_white_reward
 from rl_chess.nn_model import PolicyValueNet, train_batch
 from rl_chess.puct_mcts import PUCTMCTS, PolicyValueEvaluator
 from rl_chess.self_play import TrainingExample, play_self_game, sample_policy
@@ -51,15 +51,16 @@ class E4Evaluator(PolicyValueEvaluator):
         return {move: weight / total for move, weight in priors.items()}, 0.0
 
 
-def test_env_uses_unicode_board_and_python_chess_legality():
-    env = ChessEnv()
-    obs = env.reset()
-    assert "♔" in obs.board_ascii
-    next_obs, reward, done, info = env.step("e2e4")
-    assert reward == 0.0
-    assert done is False
-    assert info["result"] is None
-    assert "e7e5" in next_obs.legal_moves
+def test_board_helpers_keep_python_chess_as_rule_engine():
+    board = chess.Board()
+    assert "♔" in board_to_ascii(board)
+
+    move = chess.Move.from_uci("e2e4")
+    assert move in board.legal_moves
+    board.push(move)
+
+    assert result_to_white_reward(None) == 0.0
+    assert chess.Move.from_uci("e7e5") in board.legal_moves
 
 
 def test_board_encoder_preserves_visual_state_and_side_to_move():
@@ -155,11 +156,9 @@ def test_model_uses_a_deeper_residual_tower():
 
 def test_self_play_can_be_uncapped_until_terminal_from_mate_in_one():
     board = ascii_to_board(MATE_IN_ONE, turn=chess.WHITE)
-    env = ChessEnv(starting_board=board)
-    # Direct env proof: no environment turn cap exists.
-    _obs, reward, done, info = env.step("h7g7")
-    assert done is True
-    assert result_to_white_reward(info["result"]) == reward == 1.0
+    board.push(chess.Move.from_uci("h7g7"))
+    assert board.is_game_over(claim_draw=True) is True
+    assert result_to_white_reward(board.result(claim_draw=True)) == 1.0
 
 
 def test_self_play_rejects_safety_cap_instead_of_truncating_game():

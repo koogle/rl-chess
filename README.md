@@ -4,7 +4,7 @@ Learning-first reinforcement learning loops for chess, implemented by hand aroun
 
 ## What is here
 
-- `rl_chess.env`: tiny `python-chess.Board` wrapper plus Unicode board diagram conversion helpers.
+- `rl_chess.env`: Unicode board diagram conversion helpers plus result-to-reward accounting.
 - `rl_chess.nn_model.PolicyValueNet`: small policy/value network over 12 piece planes plus side-to-move.
 - `rl_chess.puct_mcts.PUCTMCTS`: hand-written neural-net-guided PUCT search over legal UCI moves.
 - `rl_chess.self_play.play_self_game`: one AlphaZero-style self-play game that records visit-count policy targets and terminal value targets.

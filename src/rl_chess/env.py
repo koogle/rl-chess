@@ -1,55 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
-
 import chess
-
-
-@dataclass(frozen=True)
-class Observation:
-    """A lightweight observation of the current chess state."""
-
-    board_ascii: str
-    turn: bool
-    legal_moves: tuple[str, ...]
-
-
-class ChessEnv:
-    """Tiny chess environment wrapper.
-
-    Rewards are from White's perspective:
-    - White win: +1
-    - Black win: -1
-    - Draw/non-terminal: 0
-    """
-
-    def __init__(self, starting_board: chess.Board | None = None) -> None:
-        self.starting_board = starting_board.copy(stack=False) if starting_board is not None else chess.Board()
-        self.board = self.starting_board.copy(stack=False)
-
-    def reset(self) -> Observation:
-        self.board = self.starting_board.copy(stack=False)
-        return self.observe()
-
-    def observe(self) -> Observation:
-        return Observation(
-            board_ascii=board_to_ascii(self.board),
-            turn=self.board.turn,
-            legal_moves=tuple(move.uci() for move in self.board.legal_moves),
-        )
-
-    def step(self, move: chess.Move | str) -> tuple[Observation, float, bool, dict[str, Any]]:
-        move_obj = chess.Move.from_uci(move) if isinstance(move, str) else move
-
-        if move_obj not in self.board.legal_moves:
-            raise ValueError(f"Illegal move {move_obj.uci()} for board:\n{board_to_ascii(self.board)}")
-
-        self.board.push(move_obj)
-        done = self.board.is_game_over(claim_draw=True)
-        result = self.board.result(claim_draw=True) if done else None
-        reward = result_to_white_reward(result)
-        return self.observe(), reward, done, {"result": result}
 
 
 def result_to_white_reward(result: str | None) -> float:

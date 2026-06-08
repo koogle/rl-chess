@@ -18,7 +18,7 @@ Build an inspectable AlphaGo-style chess loop: self-play uses PUCT search to imp
 
 ## Current implementation files
 
-- `src/rl_chess/env.py` — board wrapper, Unicode board serialization/parsing, reward conversion.
+- `src/rl_chess/env.py` — Unicode board serialization/parsing and reward conversion.
 - `src/rl_chess/nn_model.py` — policy/value model, board tensor encoding, policy/value loss.
 - `src/rl_chess/puct_mcts.py` — hand-written neural PUCT search.
 - `src/rl_chess/self_play.py` — MCTS-guided game collection.
