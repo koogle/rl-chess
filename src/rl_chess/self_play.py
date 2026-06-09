@@ -5,7 +5,7 @@ import random
 
 import chess
 
-from rl_chess.env import board_to_ascii, result_to_white_reward
+from rl_chess.env import ascii_to_board, board_to_ascii, result_to_white_reward
 from rl_chess.puct_mcts import PUCTMCTS, PolicyValueEvaluator
 
 
@@ -17,6 +17,11 @@ class TrainingExample:
     turn: bool
     policy_target: dict[str, float]
     value_target: float
+    castling_rights: int = 0
+    ep_square: int | None = None
+    halfmove_clock: int = 0
+    can_claim_threefold: bool = False
+    can_claim_fifty_moves: bool = False
 
     def __post_init__(self) -> None:
         if not self.policy_target:
@@ -34,6 +39,42 @@ class TrainingExample:
             raise ValueError("policy_target must have positive total weight")
         if not -1.0 <= self.value_target <= 1.0:
             raise ValueError("value_target must be in [-1, 1]")
+        if self.halfmove_clock < 0:
+            raise ValueError("halfmove_clock must be non-negative")
+
+    @classmethod
+    def from_board(cls, board: chess.Board, policy_target: dict[str, float], value_target: float) -> TrainingExample:
+        return cls(
+            state_ascii=board_to_ascii(board),
+            turn=board.turn,
+            policy_target=policy_target,
+            value_target=value_target,
+            castling_rights=board.castling_rights,
+            ep_square=board.ep_square,
+            halfmove_clock=board.halfmove_clock,
+            can_claim_threefold=board.can_claim_threefold_repetition(),
+            can_claim_fifty_moves=board.can_claim_fifty_moves(),
+        )
+
+    def color_flipped(self) -> TrainingExample:
+        """Return the legal color-swap/rank-mirror equivalent example."""
+
+        board = ascii_to_board(self.state_ascii, self.turn)
+        board.castling_rights = self.castling_rights
+        board.ep_square = self.ep_square
+        board.halfmove_clock = self.halfmove_clock
+        mirrored = board.mirror()
+        return TrainingExample(
+            state_ascii=board_to_ascii(mirrored),
+            turn=mirrored.turn,
+            policy_target={mirror_move_uci(move): weight for move, weight in self.policy_target.items()},
+            value_target=self.value_target,
+            castling_rights=mirrored.castling_rights,
+            ep_square=mirrored.ep_square,
+            halfmove_clock=mirrored.halfmove_clock,
+            can_claim_threefold=self.can_claim_threefold,
+            can_claim_fifty_moves=self.can_claim_fifty_moves,
+        )
 
 
 @dataclass(frozen=True)
@@ -66,9 +107,9 @@ def play_self_game(
     if max_plies is not None and max_plies <= 0:
         raise ValueError("max_plies must be positive or None")
 
-    board = starting_board.copy(stack=False) if starting_board is not None else chess.Board()
+    board = starting_board.copy(stack=True) if starting_board is not None else chess.Board()
     rng = random.Random(seed)
-    pending: list[tuple[str, bool, dict[str, float]]] = []
+    pending: list[tuple[chess.Board, dict[str, float]]] = []
     mcts = PUCTMCTS(evaluator=model_evaluator, iterations=simulations, seed=seed)
 
     plies = 0
@@ -78,22 +119,40 @@ def play_self_game(
         if max_plies is not None and plies >= max_plies:
             raise RuntimeError("non-terminal self-play game reached safety cap")
         policy = mcts.search_policy(board, add_root_noise=True)
-        pending.append((board_to_ascii(board), board.turn, policy))
+        pending.append((board.copy(stack=True), policy))
         board.push(chess.Move.from_uci(sample_policy(policy, temperature, rng)))
         plies += 1
 
     result = board.result(claim_draw=True)
     white_reward = result_to_white_reward(result)
     examples = [
-        TrainingExample(
-            state_ascii=state_ascii,
-            turn=turn,
+        TrainingExample.from_board(
+            board=example_board,
             policy_target=policy,
-            value_target=white_reward if turn == chess.WHITE else -white_reward,
+            value_target=white_reward if example_board.turn == chess.WHITE else -white_reward,
         )
-        for state_ascii, turn, policy in pending
+        for example_board, policy in pending
     ]
     return SelfPlayGame(examples=examples, stats=GameStats(len(pending), result))
+
+
+def mirror_move_uci(uci: str) -> str:
+    move = chess.Move.from_uci(uci)
+    mirrored = chess.Move(
+        from_square=chess.square_mirror(move.from_square),
+        to_square=chess.square_mirror(move.to_square),
+        promotion=move.promotion,
+        drop=move.drop,
+    )
+    return mirrored.uci()
+
+
+def augment_examples_color_flip(examples: list[TrainingExample]) -> list[TrainingExample]:
+    augmented: list[TrainingExample] = []
+    for example in examples:
+        augmented.append(example)
+        augmented.append(example.color_flipped())
+    return augmented
 
 
 def sample_policy(policy: dict[str, float], temperature: float, rng: random.Random) -> str:

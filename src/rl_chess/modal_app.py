@@ -24,8 +24,10 @@ def _jsonable_metrics(metrics: Any) -> dict[str, object]:
         "iterations": metrics.iterations,
         "games": metrics.games,
         "examples": metrics.examples,
+        "training_examples": metrics.training_examples,
         "terminal_games": metrics.terminal_games,
         "iteration_examples": metrics.iteration_examples,
+        "iteration_training_examples": metrics.iteration_training_examples,
         "loss_curve": metrics.loss_curve,
         "policy_loss_curve": metrics.policy_loss_curve,
         "value_loss_curve": metrics.value_loss_curve,
@@ -56,10 +58,12 @@ def train_remote(
     starting_board_ascii: str | None = None,
     starting_turn: str = "white",
     self_play_workers: int = 8,
+    augment_color_flip: bool = True,
+    validate_each_checkpoint: bool = True,
 ) -> dict[str, object]:
     from rl_chess.env import ascii_to_board
     from rl_chess.nn_model import PolicyValueNet
-    from rl_chess.train import train
+    from rl_chess.train import load_checkpoint_model, train
     from rl_chess.validation import validate_model_against_random, validate_model_against_stockfish
 
     model = PolicyValueNet(hidden_channels=hidden_channels, residual_blocks=residual_blocks)
@@ -72,7 +76,9 @@ def train_remote(
                     f"iteration={progress['iteration']}",
                     f"games={progress['games']}",
                     f"examples={progress['examples']}",
+                    f"training_examples={progress['training_examples']}",
                     f"iteration_examples={progress['iteration_examples']}",
+                    f"iteration_training_examples={progress['iteration_training_examples']}",
                     f"updates={progress['updates']}",
                     f"latest_loss={progress['latest_loss']}",
                     f"checkpoint_path={progress['checkpoint_path']}",
@@ -95,6 +101,7 @@ def train_remote(
         checkpoint_dir=checkpoint_dir,
         starting_board=None if starting_board_ascii is None else ascii_to_board(starting_board_ascii, starting_turn == "white"),
         self_play_workers=self_play_workers,
+        augment_color_flip=augment_color_flip,
         progress_callback=report_progress if checkpoint_dir is not None else None,
     )
     summary = _jsonable_metrics(metrics)
@@ -104,8 +111,28 @@ def train_remote(
             "residual_blocks": residual_blocks,
             "checkpoint_dir": checkpoint_dir,
             "self_play_workers": self_play_workers,
+            "augment_color_flip": augment_color_flip,
+            "validate_each_checkpoint": validate_each_checkpoint,
         }
     )
+    if validate_each_checkpoint and metrics.checkpoint_paths and (validate_stockfish or validate_random):
+        summary["checkpoint_validations"] = [
+            _validate_checkpoint(
+                path=checkpoint_path,
+                validate_stockfish=validate_stockfish,
+                validate_random=validate_random,
+                stockfish_elo=stockfish_elo,
+                validation_games=validation_games,
+                validation_max_plies=validation_max_plies,
+                simulations=simulations,
+                stockfish_movetime=stockfish_movetime,
+                seed=None if seed is None else seed + checkpoint_index,
+                load_checkpoint_model=load_checkpoint_model,
+                validate_model_against_random=validate_model_against_random,
+                validate_model_against_stockfish=validate_model_against_stockfish,
+            )
+            for checkpoint_index, checkpoint_path in enumerate(metrics.checkpoint_paths, start=1)
+        ]
     if validate_stockfish:
         validation = validate_model_against_stockfish(
             model=model,
@@ -147,6 +174,57 @@ def train_remote(
         )
     _persist_summary(checkpoint_dir, summary)
     return summary
+
+
+def _validation_summary(prefix: str, validation: Any) -> dict[str, object]:
+    return {
+        f"{prefix}_games": validation.games,
+        f"{prefix}_wins": validation.wins,
+        f"{prefix}_losses": validation.losses,
+        f"{prefix}_draws": validation.draws,
+        f"{prefix}_score": validation.score,
+        f"{prefix}_passed": validation.passed,
+    }
+
+
+def _validate_checkpoint(
+    path: Path,
+    validate_stockfish: bool,
+    validate_random: bool,
+    stockfish_elo: int,
+    validation_games: int,
+    validation_max_plies: int,
+    simulations: int,
+    stockfish_movetime: float,
+    seed: int | None,
+    load_checkpoint_model: Any,
+    validate_model_against_random: Any,
+    validate_model_against_stockfish: Any,
+) -> dict[str, object]:
+    model = load_checkpoint_model(path)
+    result: dict[str, object] = {"checkpoint_path": str(path)}
+    if validate_random:
+        random_validation = validate_model_against_random(
+            model=model,
+            games=validation_games,
+            max_plies=validation_max_plies,
+            simulations=simulations,
+            seed=seed,
+        )
+        result.update(_validation_summary("random", random_validation))
+    if validate_stockfish:
+        stockfish_validation = validate_model_against_stockfish(
+            model=model,
+            elo=stockfish_elo,
+            games=validation_games,
+            max_plies=validation_max_plies,
+            simulations=simulations,
+            stockfish_movetime=stockfish_movetime,
+            seed=seed,
+        )
+        result["stockfish_elo"] = stockfish_elo
+        result.update(_validation_summary("stockfish", stockfish_validation))
+    return result
 
 
 def _persist_summary(checkpoint_dir: str | None, summary: dict[str, object]) -> None:
@@ -201,6 +279,8 @@ def main(
     starting_board_ascii: str | None = None,
     starting_turn: str = "white",
     self_play_workers: int = 8,
+    augment_color_flip: bool = True,
+    validate_each_checkpoint: bool = True,
     wait: bool = False,
 ) -> None:
     kwargs: dict[str, object] = dict(
@@ -225,6 +305,8 @@ def main(
             starting_board_ascii=starting_board_ascii,
             starting_turn=starting_turn,
             self_play_workers=self_play_workers,
+            augment_color_flip=augment_color_flip,
+            validate_each_checkpoint=validate_each_checkpoint,
     )
     if wait:
         function_call = train_remote.spawn(**kwargs)

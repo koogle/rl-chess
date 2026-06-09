@@ -5,11 +5,11 @@ Learning-first reinforcement learning loops for chess, implemented by hand aroun
 ## What is here
 
 - `rl_chess.env`: Unicode board diagram conversion helpers plus result-to-reward accounting.
-- `rl_chess.nn_model.PolicyValueNet`: small policy/value network over 12 piece planes plus side-to-move.
+- `rl_chess.nn_model.PolicyValueNet`: small policy/value network over piece, side-to-move, castling, en-passant, halfmove-clock, and claimable-draw state planes.
 - `rl_chess.puct_mcts.PUCTMCTS`: hand-written neural-net-guided PUCT search over legal UCI moves.
 - `rl_chess.self_play.play_self_game`: one AlphaZero-style self-play game that records visit-count policy targets and terminal value targets.
-- `rl_chess.train.train`: fresh-batch policy/value training loop with optional checkpointing; each iteration generates new self-play from the latest model snapshot, then updates only on that batch.
-- `rl_chess.validation`: model-vs-baseline evaluation helpers, including weakest Stockfish / supported UCI Elo baselines.
+- `rl_chess.train.train`: fresh-batch policy/value training loop with legal color-flip augmentation and optional checkpointing; each iteration generates new self-play from the latest model snapshot, then updates only on that batch.
+- `rl_chess.validation`: model-vs-baseline evaluation helpers, including per-checkpoint random and weakest Stockfish / supported UCI Elo baselines.
 - `rl_chess.modal_app`: the supported training/evaluation entrypoint for real runs on Modal.
 
 ## Direction
@@ -161,3 +161,11 @@ uv run pytest -q
 
 - Operational change: real/non-smoke Modal training runs should use `uv run modal run --detach ...` so the app keeps running if the local client disconnects; tiny smoke runs can remain attached for quick feedback.
 - Reason: the 10,000-game run completed and persisted checkpoints, but the attached local client later emitted repeated log-continuity warnings and was killed locally after completion.
+
+### 2026-06-08 13:21:17 PDT — Added chess-state fidelity, color-flip augmentation, and checkpoint validation
+
+- Architecture change: PUCT and validation now preserve `python-chess` move history when copying boards, so repetition and fifty-move claim detection are not dropped inside search/evaluation.
+- Model-boundary change: the policy/value net now receives legal-state planes for castling rights, en-passant square, halfmove clock, claimable threefold repetition, and claimable fifty-move draw in addition to piece and side-to-move planes.
+- Methodology change: training can augment fresh self-play examples with the legal color-swap/rank-mirror equivalent; metrics now distinguish raw self-play `examples` from augmented `training_examples`.
+- Evaluation change: Modal summaries can include per-checkpoint validation entries when `--validate-random` or `--validate-stockfish` is used with checkpoints, so final-checkpoint regressions are easier to localize.
+- Verification: `uv run pytest -q` passed with `32 passed, 2 warnings`.

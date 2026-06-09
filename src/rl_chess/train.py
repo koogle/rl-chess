@@ -11,7 +11,7 @@ import chess
 import torch
 
 from rl_chess.nn_model import PolicyValueNet, TrainStats, train_batch
-from rl_chess.self_play import GameStats, SelfPlayGame, TrainingExample, play_self_game
+from rl_chess.self_play import GameStats, SelfPlayGame, TrainingExample, augment_examples_color_flip, play_self_game
 
 
 @dataclass(frozen=True)
@@ -19,8 +19,10 @@ class TrainMetrics:
     iterations: int
     games: int
     examples: int
+    training_examples: int
     terminal_games: int
     iteration_examples: int
+    iteration_training_examples: int
     loss_curve: list[float] = field(default_factory=list)
     policy_loss_curve: list[float] = field(default_factory=list)
     value_loss_curve: list[float] = field(default_factory=list)
@@ -47,8 +49,10 @@ def checkpoint_metrics(metrics: TrainMetrics) -> dict[str, object]:
         "iterations": metrics.iterations,
         "games": metrics.games,
         "examples": metrics.examples,
+        "training_examples": metrics.training_examples,
         "terminal_games": metrics.terminal_games,
         "iteration_examples": metrics.iteration_examples,
+        "iteration_training_examples": metrics.iteration_training_examples,
         "loss_curve": list(metrics.loss_curve),
         "policy_loss_curve": list(metrics.policy_loss_curve),
         "value_loss_curve": list(metrics.value_loss_curve),
@@ -62,8 +66,23 @@ def load_checkpoint_model(path: str | Path) -> PolicyValueNet:
         hidden_channels=int(checkpoint["hidden_channels"]),
         residual_blocks=int(checkpoint.get("residual_blocks", 0)),
     )
-    model.load_state_dict(checkpoint["model_state_dict"])
+    model.load_state_dict(_migrate_state_dict(checkpoint["model_state_dict"], model.state_dict()))
     return model
+
+
+def _migrate_state_dict(
+    checkpoint_state: dict[str, torch.Tensor],
+    model_state: dict[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    migrated = dict(checkpoint_state)
+    trunk_weight_key = "trunk.0.weight"
+    if trunk_weight_key in migrated and migrated[trunk_weight_key].shape != model_state[trunk_weight_key].shape:
+        old_weight = migrated[trunk_weight_key]
+        new_weight = model_state[trunk_weight_key].clone()
+        channels = min(old_weight.shape[1], new_weight.shape[1])
+        new_weight[:, :channels] = old_weight[:, :channels]
+        migrated[trunk_weight_key] = new_weight
+    return migrated
 
 
 def _model_snapshot(model: PolicyValueNet) -> dict[str, torch.Tensor]:
@@ -167,6 +186,7 @@ def train(
     checkpoint_dir: str | Path | None = None,
     starting_board: Any | None = None,
     self_play_workers: int = 1,
+    augment_color_flip: bool = True,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> TrainMetrics:
     if iterations <= 0:
@@ -197,8 +217,10 @@ def train(
     value_losses: list[float] = []
     checkpoint_paths: list[Path] = []
     examples = 0
+    training_examples = 0
     terminal_games = 0
     latest_iteration_examples = 0
+    latest_iteration_training_examples = 0
 
     for iteration in range(iterations):
         seed_offset = None if seed is None else seed + iteration * games_per_iteration
@@ -213,14 +235,17 @@ def train(
             self_play_workers=self_play_workers,
         )
         fresh_examples = [example for game in games for example in game.examples]
+        training_fresh_examples = augment_examples_color_flip(fresh_examples) if augment_color_flip else fresh_examples
         latest_iteration_examples = len(fresh_examples)
+        latest_iteration_training_examples = len(training_fresh_examples)
         examples += latest_iteration_examples
+        training_examples += latest_iteration_training_examples
         terminal_games += len(games)
 
         for _ in range(train_steps):
-            if not fresh_examples:
+            if not training_fresh_examples:
                 continue
-            batch = rng.sample(fresh_examples, k=min(batch_size, len(fresh_examples)))
+            batch = rng.sample(training_fresh_examples, k=min(batch_size, len(training_fresh_examples)))
             stats = train_batch(model, optimizer, batch)
             losses.append(stats.total_loss)
             policy_losses.append(stats.policy_loss)
@@ -232,8 +257,10 @@ def train(
                 iterations=iteration + 1,
                 games=(iteration + 1) * games_per_iteration,
                 examples=examples,
+                training_examples=training_examples,
                 terminal_games=terminal_games,
                 iteration_examples=latest_iteration_examples,
+                iteration_training_examples=latest_iteration_training_examples,
                 loss_curve=list(losses),
                 policy_loss_curve=list(policy_losses),
                 value_loss_curve=list(value_losses),
@@ -246,7 +273,9 @@ def train(
                         "iteration": iteration + 1,
                         "games": (iteration + 1) * games_per_iteration,
                         "examples": examples,
+                        "training_examples": training_examples,
                         "iteration_examples": latest_iteration_examples,
+                        "iteration_training_examples": latest_iteration_training_examples,
                         "terminal_games": terminal_games,
                         "updates": len(losses),
                         "latest_loss": losses[-1] if losses else None,
@@ -260,8 +289,10 @@ def train(
         iterations=iterations,
         games=iterations * games_per_iteration,
         examples=examples,
+        training_examples=training_examples,
         terminal_games=terminal_games,
         iteration_examples=latest_iteration_examples,
+        iteration_training_examples=latest_iteration_training_examples,
         loss_curve=losses,
         policy_loss_curve=policy_losses,
         value_loss_curve=value_losses,

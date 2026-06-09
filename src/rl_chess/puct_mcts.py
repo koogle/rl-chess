@@ -35,7 +35,7 @@ class PUCTNode:
         if self.children:
             return
         for move in self.board.legal_moves:
-            child_board = self.board.copy(stack=False)
+            child_board = self.board.copy(stack=True)
             child_board.push(move)
             self.children.append(
                 PUCTNode(
@@ -74,7 +74,7 @@ class PUCTMCTS:
         if board.is_game_over(claim_draw=True):
             raise ValueError("cannot search from a terminal board")
 
-        root = PUCTNode(board=board.copy(stack=False), player=board.turn)
+        root = PUCTNode(board=board.copy(stack=True), player=board.turn)
         priors, _ = self.evaluator.evaluate(board)
         root.expand(self._with_root_noise(priors) if add_root_noise else priors)
 

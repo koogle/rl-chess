@@ -3,9 +3,18 @@ import pytest
 import torch
 
 from rl_chess.env import ascii_to_board, board_to_ascii, result_to_white_reward
-from rl_chess.nn_model import PolicyValueNet, train_batch
+from rl_chess.nn_model import (
+    BLACK_KINGSIDE_CASTLING_PLANE,
+    CAN_CLAIM_FIFTY_MOVES_PLANE,
+    EN_PASSANT_PLANE,
+    HALFMOVE_CLOCK_PLANE,
+    INPUT_CHANNELS,
+    PolicyValueNet,
+    WHITE_KINGSIDE_CASTLING_PLANE,
+    train_batch,
+)
 from rl_chess.puct_mcts import PUCTMCTS, PolicyValueEvaluator
-from rl_chess.self_play import TrainingExample, play_self_game, sample_policy
+from rl_chess.self_play import TrainingExample, augment_examples_color_flip, mirror_move_uci, play_self_game, sample_policy
 from rl_chess.train import checkpoint_metrics, load_checkpoint_model, train
 from rl_chess.validation import (
     FixedMovePlayer,
@@ -66,14 +75,63 @@ def test_board_helpers_keep_python_chess_as_rule_engine():
 def test_board_encoder_preserves_visual_state_and_side_to_move():
     board = chess.Board()
     encoded = PolicyValueNet.encode_board_ascii(board_to_ascii(board), board.turn)
-    assert encoded.shape == (13, 8, 8)
+    assert encoded.shape == (INPUT_CHANNELS, 8, 8)
     assert encoded[:12].sum().item() == 32
     assert encoded[12].sum().item() == 64
+
+
+def test_board_encoder_includes_non_piece_chess_state():
+    board = chess.Board()
+    board.push(chess.Move.from_uci("e2e4"))
+    board.push(chess.Move.from_uci("a7a6"))
+    board.push(chess.Move.from_uci("e4e5"))
+    board.push(chess.Move.from_uci("d7d5"))
+    board.halfmove_clock = 99
+
+    encoded = PolicyValueNet.encode_board(board)
+
+    assert encoded[WHITE_KINGSIDE_CASTLING_PLANE].sum().item() == 64
+    assert encoded[BLACK_KINGSIDE_CASTLING_PLANE].sum().item() == 64
+    assert encoded[EN_PASSANT_PLANE, 2, 3].item() == 1.0
+    assert encoded[HALFMOVE_CLOCK_PLANE].max().item() == pytest.approx(0.99)
+
+
+def test_board_encoder_includes_claimable_fifty_move_draw():
+    board = chess.Board()
+    board.clear_board()
+    board.set_piece_at(chess.E1, chess.Piece(chess.KING, chess.WHITE))
+    board.set_piece_at(chess.E8, chess.Piece(chess.KING, chess.BLACK))
+    board.halfmove_clock = 100
+
+    encoded = PolicyValueNet.encode_board(board)
+
+    assert encoded[CAN_CLAIM_FIFTY_MOVES_PLANE].sum().item() == 64
 
 
 def test_puct_uses_priors_for_visit_policy():
     policy = PUCTMCTS(E4Evaluator(), iterations=16, seed=1).search_policy(chess.Board())
     assert policy["e2e4"] == max(policy.values())
+
+
+def test_puct_preserves_board_history_inside_tree():
+    class StackDepthEvaluator(PolicyValueEvaluator):
+        def __init__(self) -> None:
+            self.depths = []
+
+        def evaluate(self, board: chess.Board) -> tuple[dict[str, float], float]:
+            self.depths.append(len(board.move_stack))
+            priors = {move.uci(): 1.0 for move in board.legal_moves}
+            total = sum(priors.values())
+            return {move: weight / total for move, weight in priors.items()}, 0.0
+
+    board = chess.Board()
+    board.push(chess.Move.from_uci("e2e4"))
+    board.push(chess.Move.from_uci("e7e5"))
+    evaluator = StackDepthEvaluator()
+
+    PUCTMCTS(evaluator, iterations=1, seed=1).search_policy(board)
+
+    assert max(evaluator.depths) >= 3
 
 
 def test_ascii_board_parser_reconstructs_python_chess_position():
@@ -149,9 +207,26 @@ def test_model_is_the_puct_evaluator():
 def test_model_uses_a_deeper_residual_tower():
     model = PolicyValueNet(hidden_channels=8, residual_blocks=3)
     assert model.residual_blocks == 3
-    logits, values = model(torch.zeros((2, 13, 8, 8)))
+    logits, values = model(torch.zeros((2, INPUT_CHANNELS, 8, 8)))
     assert logits.shape == (2, 64 * 64 * 5)
     assert values.shape == (2,)
+
+
+def test_color_flip_augmentation_mirrors_legal_chess_equivalent():
+    board = chess.Board()
+    example = TrainingExample.from_board(
+        board=board,
+        policy_target={"e2e4": 0.7, "g1f3": 0.3},
+        value_target=0.25,
+    )
+    augmented = augment_examples_color_flip([example])
+    flipped = augmented[1]
+
+    assert mirror_move_uci("e2e4") == "e7e5"
+    assert flipped.turn == chess.BLACK
+    assert flipped.policy_target == {"e7e5": 0.7, "g8f6": 0.3}
+    assert flipped.value_target == example.value_target
+    assert board_to_ascii(ascii_to_board(flipped.state_ascii, flipped.turn)) == flipped.state_ascii
 
 
 def test_self_play_can_be_uncapped_until_terminal_from_mate_in_one():
@@ -180,6 +255,7 @@ def test_training_metrics_do_not_report_truncation():
     )
     assert metrics.games == 2
     assert metrics.examples == 2
+    assert metrics.training_examples == 4
     assert metrics.terminal_games == 2
     assert not hasattr(metrics, "truncated_games")
     assert len(metrics.loss_curve) == 2
@@ -228,10 +304,53 @@ def test_training_uses_only_fresh_iteration_examples_for_updates(monkeypatch):
         train_steps=1,
         batch_size=16,
         self_play_workers=1,
+        augment_color_flip=False,
         seed=1,
     )
 
     assert batches == [["e2e4", "e2e4"], ["d2d4", "d2d4"]]
+
+
+def test_training_can_use_color_flipped_training_examples(monkeypatch):
+    import importlib
+
+    train_module = importlib.import_module("rl_chess.train")
+
+    board = chess.Board()
+    example = TrainingExample.from_board(
+        board=board,
+        policy_target={"e2e4": 1.0},
+        value_target=0.0,
+    )
+    batches = []
+
+    def fake_play_self_game(*args, **kwargs):
+        return train_module.SelfPlayGame(
+            examples=[example],
+            stats=train_module.GameStats(plies=1, result="1/2-1/2"),
+        )
+
+    def fake_train_batch(model, optimizer, batch):
+        batches.append(sorted(next(iter(example.policy_target)) for example in batch))
+        return train_module.TrainStats(total_loss=1.0, policy_loss=1.0, value_loss=0.0)
+
+    monkeypatch.setattr(train_module, "play_self_game", fake_play_self_game)
+    monkeypatch.setattr(train_module, "train_batch", fake_train_batch)
+
+    metrics = train(
+        model=PolicyValueNet(hidden_channels=8),
+        iterations=1,
+        games_per_iteration=1,
+        simulations=1,
+        train_steps=1,
+        batch_size=16,
+        self_play_workers=1,
+        seed=1,
+    )
+
+    assert metrics.examples == 1
+    assert metrics.training_examples == 2
+    assert batches == [["e2e4", "e7e5"]]
 
 
 def test_training_metrics_do_not_expose_replay_buffer():
@@ -248,6 +367,7 @@ def test_training_metrics_do_not_expose_replay_buffer():
 
     assert not hasattr(metrics, "replay_size")
     assert checkpoint_metrics(metrics)["iteration_examples"] == 1
+    assert checkpoint_metrics(metrics)["iteration_training_examples"] == 2
 
 
 def test_training_writes_iteration_checkpoints(tmp_path):
@@ -289,6 +409,7 @@ def test_training_reports_progress_after_each_checkpoint(tmp_path):
     assert [item["iteration"] for item in progress] == [1, 2]
     assert [item["checkpoint_path"].name for item in progress] == ["iteration-0001.pt", "iteration-0002.pt"]
     assert progress[-1]["games"] == 2
+    assert progress[-1]["training_examples"] == 4
     assert progress[-1]["updates"] == 2
 
 
@@ -372,6 +493,31 @@ def test_validation_game_can_score_candidate_loss_as_black():
     assert result.passed is False
 
 
+def test_validation_passes_history_to_players():
+    class StackDepthPlayer:
+        def __init__(self) -> None:
+            self.depths = []
+
+        def select_move(self, board: chess.Board) -> chess.Move:
+            self.depths.append(len(board.move_stack))
+            return next(iter(board.legal_moves))
+
+    board = chess.Board()
+    board.push(chess.Move.from_uci("e2e4"))
+    board.push(chess.Move.from_uci("e7e5"))
+    candidate = StackDepthPlayer()
+
+    play_validation_game(
+        candidate=candidate,
+        baseline=FirstLegalPlayer(),
+        candidate_color=chess.WHITE,
+        starting_board=board,
+        max_plies=1,
+    )
+
+    assert candidate.depths == [2]
+
+
 def test_random_validation_baseline_plays_requested_games():
     result = play_validation_match(
         candidate=FirstLegalPlayer(),
@@ -382,3 +528,27 @@ def test_random_validation_baseline_plays_requested_games():
 
     assert result.games == 12
     assert result.draws == 12
+
+
+def test_modal_remote_can_report_checkpoint_validation():
+    from rl_chess.modal_app import train_remote
+
+    summary = train_remote.local(
+        iterations=2,
+        games_per_iteration=1,
+        max_plies=1,
+        simulations=1,
+        train_steps=1,
+        batch_size=1,
+        hidden_channels=8,
+        residual_blocks=0,
+        starting_board_ascii=KQK_BLACK_TO_MOVE,
+        starting_turn="black",
+        validate_random=True,
+        validation_games=2,
+        validation_max_plies=1,
+        seed=1,
+        checkpoint_dir=None,
+    )
+
+    assert "checkpoint_validations" not in summary

@@ -24,6 +24,16 @@ PIECE_TO_PLANE = {
     "♛": 10,
     "♚": 11,
 }
+INPUT_CHANNELS = 21
+SIDE_TO_MOVE_PLANE = 12
+WHITE_KINGSIDE_CASTLING_PLANE = 13
+WHITE_QUEENSIDE_CASTLING_PLANE = 14
+BLACK_KINGSIDE_CASTLING_PLANE = 15
+BLACK_QUEENSIDE_CASTLING_PLANE = 16
+EN_PASSANT_PLANE = 17
+HALFMOVE_CLOCK_PLANE = 18
+CAN_CLAIM_THREEFOLD_PLANE = 19
+CAN_CLAIM_FIFTY_MOVES_PLANE = 20
 BASE_MOVE_SIZE = 64 * 64
 ACTION_SIZE = BASE_MOVE_SIZE * 5
 PROMOTION_TO_OFFSET = {"q": 0, "r": 1, "b": 2, "n": 3}
@@ -66,7 +76,7 @@ class PolicyValueNet(nn.Module):
         self.hidden_channels = hidden_channels
         self.residual_blocks = residual_blocks
         self.trunk = nn.Sequential(
-            nn.Conv2d(13, hidden_channels, 3, padding=1),
+            nn.Conv2d(INPUT_CHANNELS, hidden_channels, 3, padding=1),
             nn.ReLU(),
             *(ResidualBlock(hidden_channels) for _ in range(residual_blocks)),
         )
@@ -101,7 +111,7 @@ class PolicyValueNet(nn.Module):
             return {}, 0.0
 
         device = next(self.parameters()).device
-        state = self.encode_board_ascii(board_to_ascii(board), board.turn).unsqueeze(0).to(device)
+        state = self.encode_board(board).unsqueeze(0).to(device)
         logits, values = self(state)
         indices = torch.tensor([self.action_index(move) for move in legal_moves], dtype=torch.long, device=device)
         probs = torch.softmax(logits[0, indices], dim=0)
@@ -111,11 +121,43 @@ class PolicyValueNet(nn.Module):
             self.train()
         return {move: float(prob) for move, prob in zip(legal_moves, probs)}, white_value
 
-    @staticmethod
-    def encode_board_ascii(board_ascii: str, turn: bool) -> torch.Tensor:
-        """Encode the project's visual Unicode board: 12 piece planes + side to move."""
+    @classmethod
+    def encode_board(cls, board: chess.Board) -> torch.Tensor:
+        return cls.encode_board_ascii(
+            board_to_ascii(board),
+            board.turn,
+            castling_rights=board.castling_rights,
+            ep_square=board.ep_square,
+            halfmove_clock=board.halfmove_clock,
+            can_claim_threefold=board.can_claim_threefold_repetition(),
+            can_claim_fifty_moves=board.can_claim_fifty_moves(),
+        )
 
-        tensor = torch.zeros((13, 8, 8), dtype=torch.float32)
+    @classmethod
+    def encode_training_example(cls, example: TrainingExample) -> torch.Tensor:
+        return cls.encode_board_ascii(
+            example.state_ascii,
+            example.turn,
+            castling_rights=example.castling_rights,
+            ep_square=example.ep_square,
+            halfmove_clock=example.halfmove_clock,
+            can_claim_threefold=example.can_claim_threefold,
+            can_claim_fifty_moves=example.can_claim_fifty_moves,
+        )
+
+    @staticmethod
+    def encode_board_ascii(
+        board_ascii: str,
+        turn: bool,
+        castling_rights: int = 0,
+        ep_square: int | None = None,
+        halfmove_clock: int = 0,
+        can_claim_threefold: bool = False,
+        can_claim_fifty_moves: bool = False,
+    ) -> torch.Tensor:
+        """Encode the visual board plus legal-state planes."""
+
+        tensor = torch.zeros((INPUT_CHANNELS, 8, 8), dtype=torch.float32)
         rank_lines = [line for line in board_ascii.splitlines() if line and line[0] in "12345678"]
         if len(rank_lines) != 8:
             raise ValueError("board_ascii must contain 8 rank lines")
@@ -129,7 +171,22 @@ class PolicyValueNet(nn.Module):
                     tensor[PIECE_TO_PLANE[symbol], row, col] = 1.0
 
         if turn == chess.WHITE:
-            tensor[12].fill_(1.0)
+            tensor[SIDE_TO_MOVE_PLANE].fill_(1.0)
+        if castling_rights & chess.BB_H1:
+            tensor[WHITE_KINGSIDE_CASTLING_PLANE].fill_(1.0)
+        if castling_rights & chess.BB_A1:
+            tensor[WHITE_QUEENSIDE_CASTLING_PLANE].fill_(1.0)
+        if castling_rights & chess.BB_H8:
+            tensor[BLACK_KINGSIDE_CASTLING_PLANE].fill_(1.0)
+        if castling_rights & chess.BB_A8:
+            tensor[BLACK_QUEENSIDE_CASTLING_PLANE].fill_(1.0)
+        if ep_square is not None:
+            tensor[EN_PASSANT_PLANE, 7 - chess.square_rank(ep_square), chess.square_file(ep_square)] = 1.0
+        tensor[HALFMOVE_CLOCK_PLANE].fill_(min(float(halfmove_clock), 100.0) / 100.0)
+        if can_claim_threefold:
+            tensor[CAN_CLAIM_THREEFOLD_PLANE].fill_(1.0)
+        if can_claim_fifty_moves:
+            tensor[CAN_CLAIM_FIFTY_MOVES_PLANE].fill_(1.0)
         return tensor
 
     @staticmethod
@@ -167,7 +224,7 @@ def train_batch(
 
     model.train()
     device = next(model.parameters()).device
-    states = torch.stack([model.encode_board_ascii(ex.state_ascii, ex.turn) for ex in examples]).to(device)
+    states = torch.stack([model.encode_training_example(ex) for ex in examples]).to(device)
     logits, values = model(states)
     policy_loss = model.policy_loss(logits, examples)
     value_targets = torch.tensor([ex.value_target for ex in examples], dtype=torch.float32, device=device)

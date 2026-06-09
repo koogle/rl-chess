@@ -181,12 +181,12 @@ def play_validation_game(
     if max_plies <= 0:
         raise ValueError("max_plies must be positive")
 
-    board = (starting_board or chess.Board()).copy(stack=False)
+    board = (starting_board or chess.Board()).copy(stack=True)
     for _ in range(max_plies):
         if board.is_game_over(claim_draw=True):
             break
         player = candidate if board.turn == candidate_color else baseline
-        board.push(player.select_move(board.copy(stack=False)))
+        board.push(player.select_move(board.copy(stack=True)))
 
     result = board.result(claim_draw=True) if board.is_game_over(claim_draw=True) else "1/2-1/2"
     if result == "1/2-1/2":
