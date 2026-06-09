@@ -169,3 +169,74 @@ uv run pytest -q
 - Methodology change: training can augment fresh self-play examples with the legal color-swap/rank-mirror equivalent; metrics now distinguish raw self-play `examples` from augmented `training_examples`.
 - Evaluation change: Modal summaries can include per-checkpoint validation entries when `--validate-random` or `--validate-stockfish` is used with checkpoints, so final-checkpoint regressions are easier to localize.
 - Verification: `uv run pytest -q` passed with `32 passed, 2 warnings`.
+
+### 2026-06-09 12:07:40 PDT — Local 1,000-game checkpoint random-validation curve
+
+- Modal launch was blocked by missing local Modal credentials, so this used the shared local training/evaluation core rather than the remote runner.
+- Command:
+
+```bash
+.venv/bin/python -c '
+from pathlib import Path
+import json
+from rl_chess.nn_model import PolicyValueNet
+from rl_chess.train import train, load_checkpoint_model
+from rl_chess.validation import validate_model_against_random
+checkpoint_dir = Path("/private/tmp/rl-chess-local-1000-20260609")
+model = PolicyValueNet(hidden_channels=16, residual_blocks=1)
+metrics = train(
+    model=model,
+    iterations=5,
+    games_per_iteration=2,
+    simulations=2,
+    train_steps=2,
+    batch_size=128,
+    learning_rate=0.001,
+    temperature=1.0,
+    seed=20260609,
+    checkpoint_dir=checkpoint_dir,
+    self_play_workers=1,
+)
+results = []
+for idx, path in enumerate(metrics.checkpoint_paths, start=1):
+    ckpt_model = load_checkpoint_model(path)
+    validation = validate_model_against_random(
+        ckpt_model,
+        games=200,
+        max_plies=100,
+        simulations=2,
+        seed=20260609 + idx,
+    )
+    item = {
+        "iteration": idx,
+        "checkpoint_path": str(path),
+        "wins": validation.wins,
+        "losses": validation.losses,
+        "draws": validation.draws,
+        "score": validation.score,
+        "passed": validation.passed,
+    }
+    print("checkpoint_validation " + json.dumps(item, sort_keys=True), flush=True)
+    results.append(item)
+summary = {
+    "training": {
+        "iterations": metrics.iterations,
+        "games": metrics.games,
+        "examples": metrics.examples,
+        "training_examples": metrics.training_examples,
+        "terminal_games": metrics.terminal_games,
+        "loss_curve": metrics.loss_curve,
+        "policy_loss_curve": metrics.policy_loss_curve,
+        "value_loss_curve": metrics.value_loss_curve,
+        "checkpoint_paths": [str(path) for path in metrics.checkpoint_paths],
+    },
+    "validation_games_total": sum(item["wins"] + item["losses"] + item["draws"] for item in results),
+    "checkpoint_validations": results,
+}
+print("FINAL_SUMMARY " + json.dumps(summary, sort_keys=True), flush=True)
+'
+```
+- Training: `iterations=5`, `games=10`, `examples=3653`, `training_examples=7306`, `terminal_games=10`; checkpoints written to `/private/tmp/rl-chess-local-1000-20260609/iteration-0001.pt` through `iteration-0005.pt`.
+- Loss moved from `3.0041658878326416` to `2.8489530086517334`; value loss moved from `0.06095225363969803` to `0.052564822137355804`.
+- Checkpoint random validation, 200 games/checkpoint and 1,000 games total: checkpoint 1 `5W/6L/189D`, score `0.4975`; checkpoint 2 `4W/5L/191D`, score `0.4975`; checkpoint 3 `1W/8L/191D`, score `0.4825`; checkpoint 4 `0W/3L/197D`, score `0.4925`; checkpoint 5 `3W/3L/194D`, score `0.5000`.
+- Interpretation: this small local run does not show learning against random. The curve is flat-to-worse and dominated by capped draws; decreasing training loss should not be read as strength improvement.
