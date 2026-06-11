@@ -28,6 +28,10 @@ def _jsonable_metrics(metrics: Any) -> dict[str, object]:
         "terminal_games": metrics.terminal_games,
         "iteration_examples": metrics.iteration_examples,
         "iteration_training_examples": metrics.iteration_training_examples,
+        "result_counts": metrics.result_counts,
+        "iteration_result_counts": metrics.iteration_result_counts,
+        "average_plies": metrics.average_plies,
+        "iteration_average_plies": metrics.iteration_average_plies,
         "loss_curve": metrics.loss_curve,
         "policy_loss_curve": metrics.policy_loss_curve,
         "value_loss_curve": metrics.value_loss_curve,
@@ -79,6 +83,8 @@ def train_remote(
                     f"training_examples={progress['training_examples']}",
                     f"iteration_examples={progress['iteration_examples']}",
                     f"iteration_training_examples={progress['iteration_training_examples']}",
+                    f"result_counts={progress['result_counts']}",
+                    f"iteration_average_plies={progress['iteration_average_plies']}",
                     f"updates={progress['updates']}",
                     f"latest_loss={progress['latest_loss']}",
                     f"checkpoint_path={progress['checkpoint_path']}",
@@ -150,6 +156,7 @@ def train_remote(
                 "validation_wins": validation.wins,
                 "validation_losses": validation.losses,
                 "validation_draws": validation.draws,
+                "validation_capped_draws": validation.capped_draws,
                 "validation_score": validation.score,
                 "validation_passed": validation.passed,
             }
@@ -168,6 +175,7 @@ def train_remote(
                 "random_validation_wins": validation.wins,
                 "random_validation_losses": validation.losses,
                 "random_validation_draws": validation.draws,
+                "random_validation_capped_draws": validation.capped_draws,
                 "random_validation_score": validation.score,
                 "random_validation_passed": validation.passed,
             }
@@ -182,6 +190,7 @@ def _validation_summary(prefix: str, validation: Any) -> dict[str, object]:
         f"{prefix}_wins": validation.wins,
         f"{prefix}_losses": validation.losses,
         f"{prefix}_draws": validation.draws,
+        f"{prefix}_capped_draws": validation.capped_draws,
         f"{prefix}_score": validation.score,
         f"{prefix}_passed": validation.passed,
     }

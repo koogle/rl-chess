@@ -71,6 +71,7 @@ class ValidationResult:
     wins: int = 0
     losses: int = 0
     draws: int = 0
+    capped_draws: int = 0
 
     @property
     def games(self) -> int:
@@ -89,6 +90,7 @@ class ValidationResult:
             wins=self.wins + other.wins,
             losses=self.losses + other.losses,
             draws=self.draws + other.draws,
+            capped_draws=self.capped_draws + other.capped_draws,
         )
 
 
@@ -188,9 +190,10 @@ def play_validation_game(
         player = candidate if board.turn == candidate_color else baseline
         board.push(player.select_move(board.copy(stack=True)))
 
-    result = board.result(claim_draw=True) if board.is_game_over(claim_draw=True) else "1/2-1/2"
+    capped = not board.is_game_over(claim_draw=True)
+    result = board.result(claim_draw=True) if not capped else "1/2-1/2"
     if result == "1/2-1/2":
-        return ValidationResult(draws=1)
+        return ValidationResult(draws=1, capped_draws=1 if capped else 0)
     candidate_won = (result == "1-0" and candidate_color == chess.WHITE) or (result == "0-1" and candidate_color == chess.BLACK)
     return ValidationResult(wins=1) if candidate_won else ValidationResult(losses=1)
 

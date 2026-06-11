@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -23,6 +24,10 @@ class TrainMetrics:
     terminal_games: int
     iteration_examples: int
     iteration_training_examples: int
+    result_counts: dict[str, int] = field(default_factory=dict)
+    iteration_result_counts: dict[str, int] = field(default_factory=dict)
+    average_plies: float = 0.0
+    iteration_average_plies: float = 0.0
     loss_curve: list[float] = field(default_factory=list)
     policy_loss_curve: list[float] = field(default_factory=list)
     value_loss_curve: list[float] = field(default_factory=list)
@@ -53,6 +58,10 @@ def checkpoint_metrics(metrics: TrainMetrics) -> dict[str, object]:
         "terminal_games": metrics.terminal_games,
         "iteration_examples": metrics.iteration_examples,
         "iteration_training_examples": metrics.iteration_training_examples,
+        "result_counts": dict(metrics.result_counts),
+        "iteration_result_counts": dict(metrics.iteration_result_counts),
+        "average_plies": metrics.average_plies,
+        "iteration_average_plies": metrics.iteration_average_plies,
         "loss_curve": list(metrics.loss_curve),
         "policy_loss_curve": list(metrics.policy_loss_curve),
         "value_loss_curve": list(metrics.value_loss_curve),
@@ -221,6 +230,10 @@ def train(
     terminal_games = 0
     latest_iteration_examples = 0
     latest_iteration_training_examples = 0
+    result_counts: Counter[str] = Counter()
+    total_plies = 0
+    latest_iteration_result_counts: dict[str, int] = {}
+    latest_iteration_average_plies = 0.0
 
     for iteration in range(iterations):
         seed_offset = None if seed is None else seed + iteration * games_per_iteration
@@ -241,6 +254,12 @@ def train(
         examples += latest_iteration_examples
         training_examples += latest_iteration_training_examples
         terminal_games += len(games)
+        iteration_result_counter = Counter(game.stats.result for game in games)
+        latest_iteration_result_counts = dict(iteration_result_counter)
+        latest_iteration_plies = sum(game.stats.plies for game in games)
+        latest_iteration_average_plies = latest_iteration_plies / len(games)
+        result_counts.update(iteration_result_counter)
+        total_plies += latest_iteration_plies
 
         for _ in range(train_steps):
             if not training_fresh_examples:
@@ -261,6 +280,10 @@ def train(
                 terminal_games=terminal_games,
                 iteration_examples=latest_iteration_examples,
                 iteration_training_examples=latest_iteration_training_examples,
+                result_counts=dict(result_counts),
+                iteration_result_counts=latest_iteration_result_counts,
+                average_plies=total_plies / ((iteration + 1) * games_per_iteration),
+                iteration_average_plies=latest_iteration_average_plies,
                 loss_curve=list(losses),
                 policy_loss_curve=list(policy_losses),
                 value_loss_curve=list(value_losses),
@@ -277,6 +300,10 @@ def train(
                         "iteration_examples": latest_iteration_examples,
                         "iteration_training_examples": latest_iteration_training_examples,
                         "terminal_games": terminal_games,
+                        "result_counts": dict(result_counts),
+                        "iteration_result_counts": latest_iteration_result_counts,
+                        "average_plies": total_plies / ((iteration + 1) * games_per_iteration),
+                        "iteration_average_plies": latest_iteration_average_plies,
                         "updates": len(losses),
                         "latest_loss": losses[-1] if losses else None,
                         "latest_policy_loss": policy_losses[-1] if policy_losses else None,
@@ -293,6 +320,10 @@ def train(
         terminal_games=terminal_games,
         iteration_examples=latest_iteration_examples,
         iteration_training_examples=latest_iteration_training_examples,
+        result_counts=dict(result_counts),
+        iteration_result_counts=latest_iteration_result_counts,
+        average_plies=0.0 if iterations * games_per_iteration == 0 else total_plies / (iterations * games_per_iteration),
+        iteration_average_plies=latest_iteration_average_plies,
         loss_curve=losses,
         policy_loss_curve=policy_losses,
         value_loss_curve=value_losses,

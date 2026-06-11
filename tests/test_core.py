@@ -257,6 +257,8 @@ def test_training_metrics_do_not_report_truncation():
     assert metrics.examples == 2
     assert metrics.training_examples == 4
     assert metrics.terminal_games == 2
+    assert metrics.result_counts == {"1/2-1/2": 2}
+    assert metrics.average_plies == 1.0
     assert not hasattr(metrics, "truncated_games")
     assert len(metrics.loss_curve) == 2
 
@@ -350,6 +352,8 @@ def test_training_can_use_color_flipped_training_examples(monkeypatch):
 
     assert metrics.examples == 1
     assert metrics.training_examples == 2
+    assert metrics.result_counts == {"1/2-1/2": 1}
+    assert metrics.iteration_result_counts == {"1/2-1/2": 1}
     assert batches == [["e2e4", "e7e5"]]
 
 
@@ -368,6 +372,7 @@ def test_training_metrics_do_not_expose_replay_buffer():
     assert not hasattr(metrics, "replay_size")
     assert checkpoint_metrics(metrics)["iteration_examples"] == 1
     assert checkpoint_metrics(metrics)["iteration_training_examples"] == 2
+    assert checkpoint_metrics(metrics)["result_counts"] == {"1/2-1/2": 1}
 
 
 def test_training_writes_iteration_checkpoints(tmp_path):
@@ -410,6 +415,8 @@ def test_training_reports_progress_after_each_checkpoint(tmp_path):
     assert [item["checkpoint_path"].name for item in progress] == ["iteration-0001.pt", "iteration-0002.pt"]
     assert progress[-1]["games"] == 2
     assert progress[-1]["training_examples"] == 4
+    assert progress[-1]["result_counts"] == {"1/2-1/2": 2}
+    assert progress[-1]["iteration_average_plies"] == 1.0
     assert progress[-1]["updates"] == 2
 
 
@@ -528,6 +535,7 @@ def test_random_validation_baseline_plays_requested_games():
 
     assert result.games == 12
     assert result.draws == 12
+    assert result.capped_draws == 12
 
 
 def test_modal_remote_can_report_checkpoint_validation():

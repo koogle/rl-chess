@@ -240,3 +240,11 @@ print("FINAL_SUMMARY " + json.dumps(summary, sort_keys=True), flush=True)
 - Loss moved from `3.0041658878326416` to `2.8489530086517334`; value loss moved from `0.06095225363969803` to `0.052564822137355804`.
 - Checkpoint random validation, 200 games/checkpoint and 1,000 games total: checkpoint 1 `5W/6L/189D`, score `0.4975`; checkpoint 2 `4W/5L/191D`, score `0.4975`; checkpoint 3 `1W/8L/191D`, score `0.4825`; checkpoint 4 `0W/3L/197D`, score `0.4925`; checkpoint 5 `3W/3L/194D`, score `0.5000`.
 - Interpretation: this small local run does not show learning against random. The curve is flat-to-worse and dominated by capped draws; decreasing training loss should not be read as strength improvement.
+
+### 2026-06-11 13:33:44 PDT — Diagnosed flat random-validation curve and added draw instrumentation
+
+- Diagnostic command: `.venv/bin/python -c 'from collections import Counter; from statistics import mean; from rl_chess.nn_model import PolicyValueNet; from rl_chess.train import generate_self_play_batch; model=PolicyValueNet(hidden_channels=16,residual_blocks=1); games=generate_self_play_batch(model,games=10,simulations=2,max_plies=None,temperature=1.0,seed_offset=11,self_play_workers=1); print("results", Counter(g.stats.result for g in games)); print("plies", [g.stats.plies for g in games]); print("mean_plies", mean(g.stats.plies for g in games)); print("examples", sum(len(g.examples) for g in games)); print("value_targets", Counter(ex.value_target for g in games for ex in g.examples))'`
+- Result: initial self-play with tiny search produced `8` draws and `2` black wins over `10` terminal games; plies were `[500, 376, 338, 496, 256, 174, 321, 395, 192, 254]`, mean `330.2`; examples `3302`; value targets were `2872` draw targets, `215` white-loss targets, and `215` white-win targets.
+- Interpretation: the flat 1,000-game random-validation curve is not primarily evidence that gradient descent cannot fit; the loop is mostly distilling low-simulation self-search from long drawish games, with very little decisive signal and validation mostly measuring capped-draw noise.
+- Instrumentation change: training metrics now record cumulative and per-iteration result counts plus average plies, and validation results distinguish capped draws from true terminal draws.
+- Verification: `uv run pytest -q` passed with `32 passed, 2 warnings`.
