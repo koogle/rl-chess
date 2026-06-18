@@ -361,5 +361,6 @@ PY
 - Replacement Modal launch command: `uv run modal run --detach src/rl_chess/modal_app.py::main --iterations 20 --games-per-iteration 32 --simulations 8 --train-steps 64 --batch-size 1024 --learning-rate 0.001 --temperature 1.0 --final-temperature 0.0 --temperature-drop-plies 30 --hidden-channels 32 --residual-blocks 2 --checkpoint-dir /checkpoints/fullstart-selfplay-mindraw-20260618-1635 --validate-stockfish --stockfish-elo 1 --validation-games 10 --validation-max-plies 300 --validation-simulations 8 --stockfish-movetime 0.001 --no-validate-each-checkpoint --draw-training-weight 0.0 --min-draw-games-for-training 4 --seed 20260618 --self-play-workers 8`
 - Modal run: https://modal.com/apps/koogle-frick/main/ap-hu7pddQ075duQR6gy5xjMC; function call `fc-01KVEHNP30DPH81648H90RW05A`; checkpoint dir `/checkpoints/fullstart-selfplay-mindraw-20260618-1635`.
 - Initial validation result: untrained model scored `0W/7L/3D`, score `0.15`, `wins_more_than_losses=False` against weakest Stockfish before training.
-- Status at launch: active detached run in iteration 1 self-play, no checkpoints yet, final `wins > losses` result pending.
+- Iteration 1 self-play result: `32` full-start games produced `7323` raw examples and `2816` selected training examples, with `result_counts={"1-0": 6, "1/2-1/2": 20, "0-1": 6}` and average plies `228.84375`.
+- Status at last check: active detached run after iteration 1 self-play, training update/checkpoint pending, final `wins > losses` result pending.
 - Verification: `uv run pytest -q` passed with `37 passed, 2 warnings`.
