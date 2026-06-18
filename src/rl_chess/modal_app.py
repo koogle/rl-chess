@@ -67,6 +67,7 @@ def train_remote(
     self_play_workers: int = 8,
     augment_color_flip: bool = True,
     draw_training_weight: float = 1.0,
+    min_draw_games_for_training: int = 0,
     validate_each_checkpoint: bool = True,
 ) -> dict[str, object]:
     from rl_chess.env import ascii_to_board
@@ -80,8 +81,18 @@ def train_remote(
         raise ValueError("validation_simulations must be positive or None")
     effective_validation_simulations = simulations if validation_simulations is None else validation_simulations
 
+    def report_validation_event(phase: str, payload: dict[str, object] | None = None) -> None:
+        event = {"phase": phase}
+        if payload is not None:
+            event.update(payload)
+        print("validation_event " + " ".join(f"{key}={value}" for key, value in event.items()), flush=True)
+
     initial_validation: dict[str, object] | None = None
     if validate_stockfish or validate_random:
+        report_validation_event(
+            "initial_validation_start",
+            {"games": validation_games, "simulations": effective_validation_simulations},
+        )
         initial_validation = _validate_model(
             model=model,
             validate_stockfish=validate_stockfish,
@@ -95,6 +106,7 @@ def train_remote(
             validate_model_against_random=validate_model_against_random,
             validate_model_against_stockfish=validate_model_against_stockfish,
         )
+        report_validation_event("initial_validation_complete", initial_validation)
 
     def report_progress(progress: dict[str, object]) -> None:
         print(
@@ -117,6 +129,13 @@ def train_remote(
             flush=True,
         )
 
+    def report_event(event: dict[str, object]) -> None:
+        print(
+            "training_event "
+            + " ".join(f"{key}={value}" for key, value in event.items()),
+            flush=True,
+        )
+
     metrics = train(
         model=model,
         iterations=iterations,
@@ -135,7 +154,9 @@ def train_remote(
         self_play_workers=self_play_workers,
         augment_color_flip=augment_color_flip,
         draw_training_weight=draw_training_weight,
+        min_draw_games_for_training=min_draw_games_for_training,
         progress_callback=report_progress if checkpoint_dir is not None else None,
+        event_callback=report_event,
     )
     summary = _jsonable_metrics(metrics)
     summary.update(
@@ -151,6 +172,7 @@ def train_remote(
             "self_play_workers": self_play_workers,
             "augment_color_flip": augment_color_flip,
             "draw_training_weight": draw_training_weight,
+            "min_draw_games_for_training": min_draw_games_for_training,
             "validate_each_checkpoint": validate_each_checkpoint,
         }
     )
@@ -175,6 +197,14 @@ def train_remote(
             for checkpoint_index, checkpoint_path in enumerate(metrics.checkpoint_paths, start=1)
         ]
     if validate_stockfish:
+        report_validation_event(
+            "stockfish_validation_start",
+            {
+                "stockfish_elo": stockfish_elo,
+                "games": validation_games,
+                "simulations": effective_validation_simulations,
+            },
+        )
         validation = validate_model_against_stockfish(
             model=model,
             elo=stockfish_elo,
@@ -197,7 +227,12 @@ def train_remote(
                 "validation_wins_more_than_losses": validation.wins_more_than_losses,
             }
         )
+        report_validation_event("stockfish_validation_complete", _validation_summary("stockfish", validation))
     if validate_random:
+        report_validation_event(
+            "random_validation_start",
+            {"games": validation_games, "simulations": effective_validation_simulations},
+        )
         validation = validate_model_against_random(
             model=model,
             games=validation_games,
@@ -217,6 +252,7 @@ def train_remote(
                 "random_validation_wins_more_than_losses": validation.wins_more_than_losses,
             }
         )
+        report_validation_event("random_validation_complete", _validation_summary("random", validation))
     _persist_summary(checkpoint_dir, summary)
     return summary
 
@@ -363,6 +399,7 @@ def main(
     self_play_workers: int = 8,
     augment_color_flip: bool = True,
     draw_training_weight: float = 1.0,
+    min_draw_games_for_training: int = 0,
     validate_each_checkpoint: bool = True,
     wait: bool = False,
 ) -> None:
@@ -393,6 +430,7 @@ def main(
             self_play_workers=self_play_workers,
             augment_color_flip=augment_color_flip,
             draw_training_weight=draw_training_weight,
+            min_draw_games_for_training=min_draw_games_for_training,
             validate_each_checkpoint=validate_each_checkpoint,
     )
     if wait:

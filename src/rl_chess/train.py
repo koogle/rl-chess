@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 import multiprocessing
 from pathlib import Path
 import random
+import time
 from typing import Any
 
 import chess
@@ -199,6 +200,27 @@ def generate_self_play_batch(
     return ordered
 
 
+def _select_training_games(
+    games: list[SelfPlayGame],
+    rng: random.Random,
+    draw_training_weight: float,
+    min_draw_games_for_training: int,
+) -> list[SelfPlayGame]:
+    selected = [
+        game
+        for game in games
+        if game.stats.result != "1/2-1/2" or rng.random() < draw_training_weight
+    ]
+    if selected:
+        return selected
+
+    draw_games = [game for game in games if game.stats.result == "1/2-1/2"]
+    if not draw_games or min_draw_games_for_training == 0:
+        return selected
+
+    return rng.sample(draw_games, k=min(min_draw_games_for_training, len(draw_games)))
+
+
 def train(
     model: PolicyValueNet,
     iterations: int,
@@ -217,7 +239,9 @@ def train(
     self_play_workers: int = 1,
     augment_color_flip: bool = True,
     draw_training_weight: float = 1.0,
+    min_draw_games_for_training: int = 0,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    event_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> TrainMetrics:
     if iterations <= 0:
         raise ValueError("iterations must be positive")
@@ -243,6 +267,8 @@ def train(
         raise ValueError("self_play_workers must be positive")
     if not 0.0 <= draw_training_weight <= 1.0:
         raise ValueError("draw_training_weight must be in [0, 1]")
+    if min_draw_games_for_training < 0:
+        raise ValueError("min_draw_games_for_training must be non-negative")
 
     if seed is not None:
         torch.manual_seed(seed)
@@ -264,6 +290,17 @@ def train(
 
     for iteration in range(iterations):
         seed_offset = None if seed is None else seed + iteration * games_per_iteration
+        iteration_start = time.perf_counter()
+        if event_callback is not None:
+            event_callback(
+                {
+                    "phase": "self_play_start",
+                    "iteration": iteration + 1,
+                    "games_per_iteration": games_per_iteration,
+                    "simulations": simulations,
+                    "self_play_workers": self_play_workers,
+                }
+            )
         games = generate_self_play_batch(
             model=model,
             games=games_per_iteration,
@@ -276,13 +313,15 @@ def train(
             starting_board=starting_board,
             self_play_workers=self_play_workers,
         )
+        self_play_elapsed_seconds = time.perf_counter() - iteration_start
         raw_examples = [example for game in games for example in game.examples]
-        train_source_examples = [
-            example
-            for game in games
-            if game.stats.result != "1/2-1/2" or rng.random() < draw_training_weight
-            for example in game.examples
-        ]
+        selected_training_games = _select_training_games(
+            games=games,
+            rng=rng,
+            draw_training_weight=draw_training_weight,
+            min_draw_games_for_training=min_draw_games_for_training,
+        )
+        train_source_examples = [example for game in selected_training_games for example in game.examples]
         training_fresh_examples = (
             augment_examples_color_flip(train_source_examples) if augment_color_flip else train_source_examples
         )
@@ -297,7 +336,21 @@ def train(
         latest_iteration_average_plies = latest_iteration_plies / len(games)
         result_counts.update(iteration_result_counter)
         total_plies += latest_iteration_plies
+        if event_callback is not None:
+            event_callback(
+                {
+                    "phase": "self_play_complete",
+                    "iteration": iteration + 1,
+                    "iteration_examples": latest_iteration_examples,
+                    "iteration_training_examples": latest_iteration_training_examples,
+                    "iteration_result_counts": latest_iteration_result_counts,
+                    "iteration_average_plies": latest_iteration_average_plies,
+                    "elapsed_seconds": self_play_elapsed_seconds,
+                }
+            )
 
+        training_start = time.perf_counter()
+        updates_before = len(losses)
         for _ in range(train_steps):
             if not training_fresh_examples:
                 continue
@@ -306,6 +359,18 @@ def train(
             losses.append(stats.total_loss)
             policy_losses.append(stats.policy_loss)
             value_losses.append(stats.value_loss)
+        if event_callback is not None:
+            event_callback(
+                {
+                    "phase": "train_updates_complete",
+                    "iteration": iteration + 1,
+                    "updates": len(losses) - updates_before,
+                    "elapsed_seconds": time.perf_counter() - training_start,
+                    "latest_loss": losses[-1] if losses else None,
+                    "latest_policy_loss": policy_losses[-1] if policy_losses else None,
+                    "latest_value_loss": value_losses[-1] if value_losses else None,
+                }
+            )
 
         if checkpoint_dir is not None:
             checkpoint_path = Path(checkpoint_dir) / f"iteration-{iteration + 1:04d}.pt"

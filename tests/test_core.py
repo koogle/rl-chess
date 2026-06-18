@@ -448,6 +448,63 @@ def test_training_can_exclude_draw_games_from_updates(monkeypatch):
     assert batches == [["d2d4"]]
 
 
+def test_training_can_keep_minimum_draw_games_when_all_games_draw(monkeypatch):
+    import importlib
+
+    train_module = importlib.import_module("rl_chess.train")
+
+    board = chess.Board()
+    first_draw = TrainingExample.from_board(
+        board=board,
+        policy_target={"e2e4": 1.0},
+        value_target=0.0,
+    )
+    second_draw = TrainingExample.from_board(
+        board=board,
+        policy_target={"d2d4": 1.0},
+        value_target=0.0,
+    )
+    batches = []
+    generated = [
+        train_module.SelfPlayGame(
+            examples=[first_draw],
+            stats=train_module.GameStats(plies=1, result="1/2-1/2"),
+        ),
+        train_module.SelfPlayGame(
+            examples=[second_draw],
+            stats=train_module.GameStats(plies=1, result="1/2-1/2"),
+        ),
+    ]
+
+    def fake_play_self_game(*args, **kwargs):
+        return generated.pop(0)
+
+    def fake_train_batch(model, optimizer, batch):
+        batches.append([next(iter(example.policy_target)) for example in batch])
+        return train_module.TrainStats(total_loss=1.0, policy_loss=1.0, value_loss=0.0)
+
+    monkeypatch.setattr(train_module, "play_self_game", fake_play_self_game)
+    monkeypatch.setattr(train_module, "train_batch", fake_train_batch)
+
+    metrics = train(
+        model=PolicyValueNet(hidden_channels=8),
+        iterations=1,
+        games_per_iteration=2,
+        simulations=1,
+        train_steps=1,
+        batch_size=16,
+        self_play_workers=1,
+        augment_color_flip=False,
+        draw_training_weight=0.0,
+        min_draw_games_for_training=1,
+        seed=1,
+    )
+
+    assert metrics.examples == 2
+    assert metrics.training_examples == 1
+    assert batches in [[["e2e4"]], [["d2d4"]]]
+
+
 def test_training_metrics_do_not_expose_replay_buffer():
     metrics = train(
         model=PolicyValueNet(hidden_channels=8),
@@ -511,6 +568,29 @@ def test_training_reports_progress_after_each_checkpoint(tmp_path):
     assert progress[-1]["updates"] == 2
 
 
+def test_training_reports_lifecycle_events():
+    events = []
+    train(
+        model=PolicyValueNet(hidden_channels=8),
+        iterations=1,
+        games_per_iteration=1,
+        simulations=2,
+        max_plies=1,
+        train_steps=1,
+        starting_board=ascii_to_board(KQK_BLACK_TO_MOVE, turn=chess.BLACK),
+        seed=3,
+        event_callback=events.append,
+    )
+
+    assert [event["phase"] for event in events] == [
+        "self_play_start",
+        "self_play_complete",
+        "train_updates_complete",
+    ]
+    assert events[1]["iteration_examples"] == 1
+    assert events[2]["updates"] == 1
+
+
 def test_training_rejects_invalid_public_knobs():
     model = PolicyValueNet(hidden_channels=8)
     bad_configs = [
@@ -527,6 +607,7 @@ def test_training_rejects_invalid_public_knobs():
         {"temperature_drop_plies": -1},
         {"draw_training_weight": -0.1},
         {"draw_training_weight": 1.1},
+        {"min_draw_games_for_training": -1},
     ]
     for kwargs in bad_configs:
         params = {"iterations": 1, **kwargs}

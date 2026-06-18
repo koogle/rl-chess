@@ -281,3 +281,85 @@ print("FINAL_SUMMARY " + json.dumps(summary, sort_keys=True), flush=True)
 - Modal run: https://modal.com/apps/koogle-frick/main/ap-9CobGw4Lhy8QOM7rHBpKcY; function call `fc-01KVEGW2FC542Q25X3PMB4N916`; checkpoint dir `/checkpoints/fullstart-selfplay-process-20260618-1710`.
 - Status at launch: active detached run, final Stockfish result pending.
 - Verification: `uv run pytest -q` passed with `35 passed, 2 warnings`.
+
+### 2026-06-18 16:40:08 PDT — Full-start all-draw fallback and observable remote validation
+
+- Methodology change: added `min_draw_games_for_training` so fresh self-play batches still produce optimizer updates when every normal-start game is a draw and `draw_training_weight=0.0`. Decisive games remain preferred whenever present; this does not add replay, curriculum starts, or external teacher data.
+- Observability change: Modal training now emits `validation_event` lines around initial and final validation plus `training_event` lifecycle lines around each self-play/training phase, so long full-start runs can be inspected before summaries are written.
+- Failed capped smoke command:
+```bash
+uv run python - <<'PY'
+from rl_chess.nn_model import PolicyValueNet
+from rl_chess.train import train
+
+events = []
+metrics = train(
+    model=PolicyValueNet(hidden_channels=8, residual_blocks=0),
+    iterations=1,
+    games_per_iteration=2,
+    simulations=1,
+    train_steps=1,
+    batch_size=32,
+    max_plies=12,
+    temperature=1.0,
+    final_temperature=0.0,
+    temperature_drop_plies=10,
+    draw_training_weight=0.0,
+    min_draw_games_for_training=1,
+    self_play_workers=2,
+    seed=20260618,
+    event_callback=events.append,
+)
+print({
+    "games": metrics.games,
+    "examples": metrics.examples,
+    "training_examples": metrics.training_examples,
+    "result_counts": metrics.result_counts,
+    "loss_updates": len(metrics.loss_curve),
+    "event_phases": [event["phase"] for event in events],
+})
+PY
+```
+- Failed capped smoke result: the full-start self-play games hit `RuntimeError: non-terminal self-play game reached safety cap`. Interpretation: full-start training/evaluation smokes must play to terminal outcomes rather than turning short truncations into draw targets.
+- Uncapped local worker smoke command:
+```bash
+uv run python - <<'PY'
+from rl_chess.nn_model import PolicyValueNet
+from rl_chess.train import train
+
+events = []
+metrics = train(
+    model=PolicyValueNet(hidden_channels=8, residual_blocks=0),
+    iterations=1,
+    games_per_iteration=2,
+    simulations=1,
+    train_steps=1,
+    batch_size=32,
+    temperature=1.0,
+    final_temperature=0.0,
+    temperature_drop_plies=10,
+    draw_training_weight=0.0,
+    min_draw_games_for_training=1,
+    self_play_workers=2,
+    seed=20260618,
+    event_callback=events.append,
+)
+print({
+    "games": metrics.games,
+    "examples": metrics.examples,
+    "training_examples": metrics.training_examples,
+    "result_counts": metrics.result_counts,
+    "loss_updates": len(metrics.loss_curve),
+    "event_phases": [event["phase"] for event in events],
+})
+PY
+```
+- Uncapped local worker smoke result: `2` normal-start terminal games, both draws, `585` examples, `444` color-augmented training examples from the fallback draw game, `1` optimizer update, and lifecycle events `self_play_start`, `self_play_complete`, `train_updates_complete`.
+- Remote smoke command: `uv run modal run src/rl_chess/modal_app.py::main --iterations 1 --games-per-iteration 2 --simulations 1 --train-steps 1 --batch-size 32 --hidden-channels 8 --residual-blocks 0 --temperature 1.0 --final-temperature 0.0 --temperature-drop-plies 10 --draw-training-weight 0.0 --min-draw-games-for-training 1 --self-play-workers 2 --seed 20260618 --wait`
+- Remote smoke result: Modal function call `fc-01KVEHA14EVWA31HJN1V9H3G6H` completed with `2` normal-start terminal games, both draws, `688` examples, `534` fallback training examples, `1` optimizer update, and `loss_curve=[2.8246209621429443]`.
+- Stockfish baseline sanity check: random lost `10/10` and first-legal lost `9/10` with one draw against `StockfishPlayer(elo=1, movetime=0.001)`, so the weakest configured Stockfish baseline still requires non-trivial chess strength.
+- Replacement Modal launch command: `uv run modal run --detach src/rl_chess/modal_app.py::main --iterations 20 --games-per-iteration 32 --simulations 8 --train-steps 64 --batch-size 1024 --learning-rate 0.001 --temperature 1.0 --final-temperature 0.0 --temperature-drop-plies 30 --hidden-channels 32 --residual-blocks 2 --checkpoint-dir /checkpoints/fullstart-selfplay-mindraw-20260618-1635 --validate-stockfish --stockfish-elo 1 --validation-games 10 --validation-max-plies 300 --validation-simulations 8 --stockfish-movetime 0.001 --no-validate-each-checkpoint --draw-training-weight 0.0 --min-draw-games-for-training 4 --seed 20260618 --self-play-workers 8`
+- Modal run: https://modal.com/apps/koogle-frick/main/ap-hu7pddQ075duQR6gy5xjMC; function call `fc-01KVEHNP30DPH81648H90RW05A`; checkpoint dir `/checkpoints/fullstart-selfplay-mindraw-20260618-1635`.
+- Initial validation result: untrained model scored `0W/7L/3D`, score `0.15`, `wins_more_than_losses=False` against weakest Stockfish before training.
+- Status at launch: active detached run in iteration 1 self-play, no checkpoints yet, final `wins > losses` result pending.
+- Verification: `uv run pytest -q` passed with `37 passed, 2 warnings`.
