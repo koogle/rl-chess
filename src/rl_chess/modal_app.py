@@ -131,6 +131,7 @@ def train_remote(
             ),
             flush=True,
         )
+        checkpoint_volume.commit()
 
     def report_event(event: dict[str, object]) -> None:
         print(

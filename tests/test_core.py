@@ -4,6 +4,7 @@ import torch
 
 from rl_chess.env import ascii_to_board, board_to_ascii, result_to_white_reward
 from rl_chess.nn_model import (
+    ACTION_SIZE,
     BLACK_KINGSIDE_CASTLING_PLANE,
     CAN_CLAIM_FIFTY_MOVES_PLANE,
     EN_PASSANT_PLANE,
@@ -215,6 +216,36 @@ def test_policy_value_trainer_reduces_loss_on_repeated_target():
     for _ in range(12):
         last = train_batch(model, optimizer, [example]).total_loss
     assert last < first
+
+
+def test_policy_loss_matches_manual_legal_move_cross_entropy():
+    board = chess.Board()
+    examples = [
+        TrainingExample(
+            state_ascii=board_to_ascii(board),
+            turn=board.turn,
+            policy_target={"e2e4": 0.25, "d2d4": 0.75},
+            value_target=1.0,
+        ),
+        TrainingExample(
+            state_ascii=board_to_ascii(board),
+            turn=board.turn,
+            policy_target={"g1f3": 0.5, "c2c4": 0.25, "b1c3": 0.25},
+            value_target=-1.0,
+        ),
+    ]
+    logits = torch.randn((len(examples), ACTION_SIZE), generator=torch.Generator().manual_seed(7))
+
+    actual = PolicyValueNet.policy_loss(logits, examples)
+    expected_losses = []
+    for row, example in enumerate(examples):
+        moves = tuple(example.policy_target)
+        indices = torch.tensor([PolicyValueNet.action_index(move) for move in moves], dtype=torch.long)
+        target = torch.tensor([example.policy_target[move] for move in moves], dtype=torch.float32)
+        target = target / target.sum()
+        expected_losses.append(-(target * torch.nn.functional.log_softmax(logits[row, indices], dim=0)).sum())
+
+    assert torch.allclose(actual, torch.stack(expected_losses).mean())
 
 
 def test_model_is_the_puct_evaluator():

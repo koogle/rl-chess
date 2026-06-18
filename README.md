@@ -378,3 +378,16 @@ PY
 - Initial validation result: untrained model scored `0W/10L/0D`, score `0.0`, `wins_more_than_losses=False` against weakest Stockfish before training.
 - Status at launch: active detached run in iteration 1 self-play with `training_device=cuda`; final `wins > losses` result pending.
 - Verification: `uv run pytest -q` passed with `38 passed, 2 warnings`.
+
+### 2026-06-18 16:57:46 PDT — Vectorized legal-policy loss and checkpoint persistence
+
+- Performance change: vectorized `PolicyValueNet.policy_loss` across the batch while preserving the same legal/search-move cross entropy target. This removes the per-example Python softmax loop from every optimizer step and keeps the target purely self-play PUCT visit distributions.
+- Durability change: Modal now commits the checkpoint volume after each `checkpoint_progress` event so intermediate checkpoints are available even if a long detached run is stopped before final summary writing.
+- Stopped stale run command: `uv run modal app stop --yes ap-PQa2OXN0Ed6jm7PQ4xfjZJ`.
+- Stale run result before stop: initial weakest-Stockfish validation was `0W/10L/0D`; iteration 1 self-play completed with `11027` raw examples, `788` selected training examples, `result_counts={"1/2-1/2": 28, "0-1": 2, "1-0": 2}`, average plies `344.59375`; 64 training updates took `83.39013720200003s`, and checkpoint `/checkpoints/fullstart-selfplay-cuda-20260618-1649/iteration-0001.pt` was written inside the still-running container but not visible through the volume before final commit.
+- Vectorized-loss verification command: `uv run pytest -q tests/test_core.py::test_policy_loss_matches_manual_legal_move_cross_entropy tests/test_core.py::test_policy_value_trainer_reduces_loss_on_repeated_target`
+- Vectorized-loss verification result: `2 passed`.
+- Full verification command: `uv run pytest -q`
+- Full verification result: `39 passed, 2 warnings`.
+- CUDA process-worker smoke command: `uv run modal run src/rl_chess/modal_app.py::main --iterations 1 --games-per-iteration 8 --simulations 8 --train-steps 1 --batch-size 128 --hidden-channels 16 --residual-blocks 1 --temperature 1.0 --final-temperature 0.0 --temperature-drop-plies 30 --draw-training-weight 0.0 --min-draw-games-for-training 2 --self-play-workers 8 --seed 20260618 --training-device auto --wait`
+- CUDA process-worker smoke result: Modal function call `fc-01KVEJMFQSHM952TKH46PA25YT` completed `8` normal-start terminal games with `training_device=cuda`; self-play took `43.591788909s`, and the single optimizer update took `2.1119762530000017s`.
