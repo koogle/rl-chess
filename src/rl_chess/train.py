@@ -34,6 +34,7 @@ class TrainMetrics:
     policy_loss_curve: list[float] = field(default_factory=list)
     value_loss_curve: list[float] = field(default_factory=list)
     checkpoint_paths: list[Path] = field(default_factory=list)
+    training_device: str = "cpu"
 
 
 def save_checkpoint(model: PolicyValueNet, path: str | Path, metrics: TrainMetrics | None = None) -> Path:
@@ -43,7 +44,7 @@ def save_checkpoint(model: PolicyValueNet, path: str | Path, metrics: TrainMetri
         {
             "hidden_channels": model.hidden_channels,
             "residual_blocks": model.residual_blocks,
-            "model_state_dict": model.state_dict(),
+            "model_state_dict": {name: tensor.detach().cpu().clone() for name, tensor in model.state_dict().items()},
             "metrics": None if metrics is None else checkpoint_metrics(metrics),
         },
         checkpoint_path,
@@ -68,6 +69,7 @@ def checkpoint_metrics(metrics: TrainMetrics) -> dict[str, object]:
         "policy_loss_curve": list(metrics.policy_loss_curve),
         "value_loss_curve": list(metrics.value_loss_curve),
         "checkpoint_paths": [str(path) for path in metrics.checkpoint_paths],
+        "training_device": metrics.training_device,
     }
 
 
@@ -100,9 +102,27 @@ def _model_snapshot(model: PolicyValueNet) -> dict[str, torch.Tensor]:
     return {name: tensor.detach().cpu().clone() for name, tensor in model.state_dict().items()}
 
 
-def _self_play_process_context() -> multiprocessing.context.BaseContext:
+def _self_play_process_context(start_method: str | None = None) -> multiprocessing.context.BaseContext:
     methods = multiprocessing.get_all_start_methods()
+    if start_method is not None:
+        if start_method not in methods:
+            raise ValueError(f"unsupported multiprocessing start method: {start_method}")
+        return multiprocessing.get_context(start_method)
     return multiprocessing.get_context("fork" if "fork" in methods else methods[0])
+
+
+def _resolve_training_device(training_device: str | torch.device) -> torch.device:
+    if str(training_device) == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    try:
+        resolved = torch.device(training_device)
+    except (RuntimeError, TypeError) as exc:
+        raise ValueError(f"invalid training_device: {training_device}") from exc
+    if resolved.type == "cuda" and not torch.cuda.is_available():
+        raise ValueError("cuda training_device requested but CUDA is not available")
+    if resolved.type == "mps" and not torch.backends.mps.is_available():
+        raise ValueError("mps training_device requested but MPS is not available")
+    return resolved
 
 
 def _play_chunk(
@@ -147,6 +167,7 @@ def generate_self_play_batch(
     temperature_drop_plies: int | None = None,
     starting_board: chess.Board | None = None,
     self_play_workers: int = 1,
+    self_play_start_method: str | None = None,
 ) -> list[SelfPlayGame]:
     """Generate one fresh self-play batch from a frozen snapshot of the latest model."""
 
@@ -174,7 +195,10 @@ def generate_self_play_batch(
     workers = min(self_play_workers, games)
     chunks = [seeds[index::workers] for index in range(workers)]
     state_dict = _model_snapshot(model)
-    with ProcessPoolExecutor(max_workers=workers, mp_context=_self_play_process_context()) as executor:
+    with ProcessPoolExecutor(
+        max_workers=workers,
+        mp_context=_self_play_process_context(self_play_start_method),
+    ) as executor:
         futures = [
             executor.submit(
                 _play_chunk,
@@ -240,6 +264,7 @@ def train(
     augment_color_flip: bool = True,
     draw_training_weight: float = 1.0,
     min_draw_games_for_training: int = 0,
+    training_device: str | torch.device = "cpu",
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     event_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> TrainMetrics:
@@ -270,6 +295,9 @@ def train(
     if min_draw_games_for_training < 0:
         raise ValueError("min_draw_games_for_training must be non-negative")
 
+    resolved_training_device = _resolve_training_device(training_device)
+    resolved_training_device_name = str(resolved_training_device)
+    model.to(resolved_training_device)
     if seed is not None:
         torch.manual_seed(seed)
     rng = random.Random(seed)
@@ -299,8 +327,10 @@ def train(
                     "games_per_iteration": games_per_iteration,
                     "simulations": simulations,
                     "self_play_workers": self_play_workers,
+                    "training_device": resolved_training_device_name,
                 }
             )
+        self_play_start_method = "spawn" if resolved_training_device.type == "cuda" else None
         games = generate_self_play_batch(
             model=model,
             games=games_per_iteration,
@@ -312,6 +342,7 @@ def train(
             seed_offset=seed_offset,
             starting_board=starting_board,
             self_play_workers=self_play_workers,
+            self_play_start_method=self_play_start_method,
         )
         self_play_elapsed_seconds = time.perf_counter() - iteration_start
         raw_examples = [example for game in games for example in game.examples]
@@ -390,6 +421,7 @@ def train(
                 policy_loss_curve=list(policy_losses),
                 value_loss_curve=list(value_losses),
                 checkpoint_paths=[*checkpoint_paths, checkpoint_path],
+                training_device=resolved_training_device_name,
             )
             checkpoint_paths.append(save_checkpoint(model, checkpoint_path, snapshot))
             if progress_callback is not None:
@@ -411,6 +443,7 @@ def train(
                         "latest_policy_loss": policy_losses[-1] if policy_losses else None,
                         "latest_value_loss": value_losses[-1] if value_losses else None,
                         "checkpoint_path": checkpoint_path,
+                        "training_device": resolved_training_device_name,
                     }
                 )
 
@@ -430,4 +463,5 @@ def train(
         policy_loss_curve=policy_losses,
         value_loss_curve=value_losses,
         checkpoint_paths=checkpoint_paths,
+        training_device=resolved_training_device_name,
     )

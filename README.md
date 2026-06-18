@@ -364,3 +364,17 @@ PY
 - Iteration 1 self-play result: `32` full-start games produced `7323` raw examples and `2816` selected training examples, with `result_counts={"1-0": 6, "1/2-1/2": 20, "0-1": 6}` and average plies `228.84375`.
 - Status at last check: active detached run after iteration 1 self-play, training update/checkpoint pending, final `wins > losses` result pending.
 - Verification: `uv run pytest -q` passed with `37 passed, 2 warnings`.
+
+### 2026-06-18 16:48:42 PDT — GPU-backed training updates for full-start self-play
+
+- Performance change: Modal training now requests a `T4` GPU, and the shared training loop accepts `training_device` with `auto` resolving to CUDA when available. Checkpoints store CPU state dicts for portable reloads, and CUDA training uses a spawned self-play process context to avoid forking after CUDA initialization. This keeps the data path as fresh full-start self-play only.
+- Stale CPU-run stop command: `uv run modal app stop --yes ap-hu7pddQ075duQR6gy5xjMC`.
+- CUDA smoke command: `uv run modal run src/rl_chess/modal_app.py::main --iterations 1 --games-per-iteration 1 --simulations 1 --train-steps 1 --batch-size 16 --hidden-channels 8 --residual-blocks 0 --temperature 1.0 --final-temperature 0.0 --temperature-drop-plies 10 --draw-training-weight 0.0 --min-draw-games-for-training 1 --self-play-workers 1 --seed 20260618 --training-device auto --wait`
+- CUDA smoke result: Modal function call `fc-01KVEJ41CRNBD3YD131WACK4SS` completed one normal-start terminal draw with `training_device=cuda`; the single optimizer update took `0.9778186650000009s`.
+- CUDA process-worker smoke command: `uv run modal run src/rl_chess/modal_app.py::main --iterations 1 --games-per-iteration 2 --simulations 1 --train-steps 1 --batch-size 16 --hidden-channels 8 --residual-blocks 0 --temperature 1.0 --final-temperature 0.0 --temperature-drop-plies 10 --draw-training-weight 0.0 --min-draw-games-for-training 1 --self-play-workers 2 --seed 20260618 --training-device auto --wait`
+- CUDA process-worker smoke result: Modal function call `fc-01KVEJ50EH9Z4K8SRC0S9Y59YG` completed two normal-start terminal draws with `training_device=cuda`; spawned self-play workers completed in `12.287261545999998s`, and the single optimizer update took `1.7486199790000008s`.
+- Replacement Modal launch command: `uv run modal run --detach src/rl_chess/modal_app.py::main --iterations 20 --games-per-iteration 32 --simulations 8 --train-steps 64 --batch-size 1024 --learning-rate 0.001 --temperature 1.0 --final-temperature 0.0 --temperature-drop-plies 30 --hidden-channels 32 --residual-blocks 2 --checkpoint-dir /checkpoints/fullstart-selfplay-cuda-20260618-1649 --validate-stockfish --stockfish-elo 1 --validation-games 10 --validation-max-plies 300 --validation-simulations 8 --stockfish-movetime 0.001 --no-validate-each-checkpoint --draw-training-weight 0.0 --min-draw-games-for-training 4 --training-device auto --seed 20260618 --self-play-workers 8`
+- Modal run: https://modal.com/apps/koogle-frick/main/ap-PQa2OXN0Ed6jm7PQ4xfjZJ; function call `fc-01KVEJ6EZK9R76RR94FFGF6TFH`; checkpoint dir `/checkpoints/fullstart-selfplay-cuda-20260618-1649`.
+- Initial validation result: untrained model scored `0W/10L/0D`, score `0.0`, `wins_more_than_losses=False` against weakest Stockfish before training.
+- Status at launch: active detached run in iteration 1 self-play with `training_device=cuda`; final `wins > losses` result pending.
+- Verification: `uv run pytest -q` passed with `38 passed, 2 warnings`.

@@ -36,10 +36,11 @@ def _jsonable_metrics(metrics: Any) -> dict[str, object]:
         "policy_loss_curve": metrics.policy_loss_curve,
         "value_loss_curve": metrics.value_loss_curve,
         "checkpoint_paths": [str(path) for path in metrics.checkpoint_paths],
+        "training_device": metrics.training_device,
     }
 
 
-@app.function(image=image, timeout=24 * 60 * 60, cpu=8, volumes={str(CHECKPOINT_ROOT): checkpoint_volume})
+@app.function(image=image, timeout=24 * 60 * 60, cpu=8, gpu="T4", volumes={str(CHECKPOINT_ROOT): checkpoint_volume})
 def train_remote(
     iterations: int = 10,
     games_per_iteration: int = 1,
@@ -68,6 +69,7 @@ def train_remote(
     augment_color_flip: bool = True,
     draw_training_weight: float = 1.0,
     min_draw_games_for_training: int = 0,
+    training_device: str = "auto",
     validate_each_checkpoint: bool = True,
 ) -> dict[str, object]:
     from rl_chess.env import ascii_to_board
@@ -124,6 +126,7 @@ def train_remote(
                     f"updates={progress['updates']}",
                     f"latest_loss={progress['latest_loss']}",
                     f"checkpoint_path={progress['checkpoint_path']}",
+                    f"training_device={progress['training_device']}",
                 ]
             ),
             flush=True,
@@ -155,6 +158,7 @@ def train_remote(
         augment_color_flip=augment_color_flip,
         draw_training_weight=draw_training_weight,
         min_draw_games_for_training=min_draw_games_for_training,
+        training_device=training_device,
         progress_callback=report_progress if checkpoint_dir is not None else None,
         event_callback=report_event,
     )
@@ -173,6 +177,7 @@ def train_remote(
             "augment_color_flip": augment_color_flip,
             "draw_training_weight": draw_training_weight,
             "min_draw_games_for_training": min_draw_games_for_training,
+            "requested_training_device": training_device,
             "validate_each_checkpoint": validate_each_checkpoint,
         }
     )
@@ -400,6 +405,7 @@ def main(
     augment_color_flip: bool = True,
     draw_training_weight: float = 1.0,
     min_draw_games_for_training: int = 0,
+    training_device: str = "auto",
     validate_each_checkpoint: bool = True,
     wait: bool = False,
 ) -> None:
@@ -431,6 +437,7 @@ def main(
             augment_color_flip=augment_color_flip,
             draw_training_weight=draw_training_weight,
             min_draw_games_for_training=min_draw_games_for_training,
+            training_device=training_device,
             validate_each_checkpoint=validate_each_checkpoint,
     )
     if wait:

@@ -195,6 +195,8 @@ def test_modal_remote_training_accepts_ascii_starting_board():
     assert summary["games"] == 1
     assert summary["hidden_channels"] == 8
     assert summary["residual_blocks"] == 0
+    assert summary["requested_training_device"] == "auto"
+    assert summary["training_device"] in {"cpu", "cuda"}
 
 
 def test_policy_value_trainer_reduces_loss_on_repeated_target():
@@ -521,6 +523,27 @@ def test_training_metrics_do_not_expose_replay_buffer():
     assert checkpoint_metrics(metrics)["iteration_examples"] == 1
     assert checkpoint_metrics(metrics)["iteration_training_examples"] == 2
     assert checkpoint_metrics(metrics)["result_counts"] == {"1/2-1/2": 1}
+    assert checkpoint_metrics(metrics)["training_device"] == "cpu"
+
+
+def test_training_reports_resolved_training_device():
+    events = []
+    metrics = train(
+        model=PolicyValueNet(hidden_channels=8),
+        iterations=1,
+        games_per_iteration=1,
+        simulations=2,
+        max_plies=1,
+        train_steps=1,
+        starting_board=ascii_to_board(KQK_BLACK_TO_MOVE, turn=chess.BLACK),
+        seed=3,
+        training_device="auto",
+        event_callback=events.append,
+    )
+
+    expected = "cuda" if torch.cuda.is_available() else "cpu"
+    assert metrics.training_device == expected
+    assert events[0]["training_device"] == expected
 
 
 def test_training_writes_iteration_checkpoints(tmp_path):
@@ -608,6 +631,7 @@ def test_training_rejects_invalid_public_knobs():
         {"draw_training_weight": -0.1},
         {"draw_training_weight": 1.1},
         {"min_draw_games_for_training": -1},
+        {"training_device": "definitely-not-a-device"},
     ]
     for kwargs in bad_configs:
         params = {"iterations": 1, **kwargs}
