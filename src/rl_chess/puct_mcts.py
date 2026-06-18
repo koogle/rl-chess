@@ -9,6 +9,8 @@ import chess
 
 from rl_chess.env import result_to_white_reward
 
+DRAW_HISTORY_PLIES = 100
+
 
 class PolicyValueEvaluator(Protocol):
     def evaluate(self, board: chess.Board) -> tuple[dict[str, float], float]:
@@ -35,7 +37,7 @@ class PUCTNode:
         if self.children:
             return
         for move in self.board.legal_moves:
-            child_board = self.board.copy(stack=True)
+            child_board = self.board.copy(stack=DRAW_HISTORY_PLIES)
             child_board.push(move)
             self.children.append(
                 PUCTNode(
@@ -74,7 +76,7 @@ class PUCTMCTS:
         if board.is_game_over(claim_draw=True):
             raise ValueError("cannot search from a terminal board")
 
-        root = PUCTNode(board=board.copy(stack=True), player=board.turn)
+        root = PUCTNode(board=board.copy(stack=DRAW_HISTORY_PLIES), player=board.turn)
         priors, _ = self.evaluator.evaluate(board)
         root.expand(self._with_root_noise(priors) if add_root_noise else priors)
 

@@ -85,6 +85,10 @@ class ValidationResult:
     def passed(self) -> bool:
         return self.score > 0.5
 
+    @property
+    def wins_more_than_losses(self) -> bool:
+        return self.wins > self.losses
+
     def plus(self, other: ValidationResult) -> ValidationResult:
         return ValidationResult(
             wins=self.wins + other.wins,

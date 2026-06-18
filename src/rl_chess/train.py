@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
+import multiprocessing
 from pathlib import Path
 import random
 from typing import Any
@@ -98,6 +99,11 @@ def _model_snapshot(model: PolicyValueNet) -> dict[str, torch.Tensor]:
     return {name: tensor.detach().cpu().clone() for name, tensor in model.state_dict().items()}
 
 
+def _self_play_process_context() -> multiprocessing.context.BaseContext:
+    methods = multiprocessing.get_all_start_methods()
+    return multiprocessing.get_context("fork" if "fork" in methods else methods[0])
+
+
 def _play_chunk(
     state_dict: dict[str, torch.Tensor],
     hidden_channels: int,
@@ -106,8 +112,11 @@ def _play_chunk(
     simulations: int,
     max_plies: int | None,
     temperature: float,
+    final_temperature: float | None,
+    temperature_drop_plies: int | None,
     starting_board: chess.Board | None,
 ) -> list[SelfPlayGame]:
+    torch.set_num_threads(1)
     worker_model = PolicyValueNet(hidden_channels=hidden_channels, residual_blocks=residual_blocks)
     worker_model.load_state_dict(state_dict)
     worker_model.eval()
@@ -117,6 +126,8 @@ def _play_chunk(
             simulations=simulations,
             max_plies=max_plies,
             temperature=temperature,
+            final_temperature=final_temperature,
+            temperature_drop_plies=temperature_drop_plies,
             seed=game_seed,
             starting_board=starting_board,
         )
@@ -131,6 +142,8 @@ def generate_self_play_batch(
     max_plies: int | None,
     temperature: float,
     seed_offset: int | None,
+    final_temperature: float | None = None,
+    temperature_drop_plies: int | None = None,
     starting_board: chess.Board | None = None,
     self_play_workers: int = 1,
 ) -> list[SelfPlayGame]:
@@ -149,6 +162,8 @@ def generate_self_play_batch(
                 simulations=simulations,
                 max_plies=max_plies,
                 temperature=temperature,
+                final_temperature=final_temperature,
+                temperature_drop_plies=temperature_drop_plies,
                 seed=game_seed,
                 starting_board=starting_board,
             )
@@ -158,9 +173,10 @@ def generate_self_play_batch(
     workers = min(self_play_workers, games)
     chunks = [seeds[index::workers] for index in range(workers)]
     state_dict = _model_snapshot(model)
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        chunk_results = executor.map(
-            lambda chunk: _play_chunk(
+    with ProcessPoolExecutor(max_workers=workers, mp_context=_self_play_process_context()) as executor:
+        futures = [
+            executor.submit(
+                _play_chunk,
                 state_dict=state_dict,
                 hidden_channels=model.hidden_channels,
                 residual_blocks=model.residual_blocks,
@@ -168,11 +184,13 @@ def generate_self_play_batch(
                 simulations=simulations,
                 max_plies=max_plies,
                 temperature=temperature,
+                final_temperature=final_temperature,
+                temperature_drop_plies=temperature_drop_plies,
                 starting_board=starting_board,
-            ),
-            chunks,
-        )
-    games_by_chunk = list(chunk_results)
+            )
+            for chunk in chunks
+        ]
+        games_by_chunk = [future.result() for future in futures]
     ordered: list[SelfPlayGame] = []
     for game_index in range(games):
         chunk_index = game_index % workers
@@ -191,11 +209,14 @@ def train(
     batch_size: int = 64,
     learning_rate: float = 1e-3,
     temperature: float = 1.0,
+    final_temperature: float | None = None,
+    temperature_drop_plies: int | None = None,
     seed: int | None = None,
     checkpoint_dir: str | Path | None = None,
     starting_board: Any | None = None,
     self_play_workers: int = 1,
     augment_color_flip: bool = True,
+    draw_training_weight: float = 1.0,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> TrainMetrics:
     if iterations <= 0:
@@ -214,8 +235,14 @@ def train(
         raise ValueError("learning_rate must be positive")
     if temperature < 0:
         raise ValueError("temperature must be non-negative")
+    if final_temperature is not None and final_temperature < 0:
+        raise ValueError("final_temperature must be non-negative or None")
+    if temperature_drop_plies is not None and temperature_drop_plies < 0:
+        raise ValueError("temperature_drop_plies must be non-negative or None")
     if self_play_workers <= 0:
         raise ValueError("self_play_workers must be positive")
+    if not 0.0 <= draw_training_weight <= 1.0:
+        raise ValueError("draw_training_weight must be in [0, 1]")
 
     if seed is not None:
         torch.manual_seed(seed)
@@ -243,13 +270,23 @@ def train(
             simulations=simulations,
             max_plies=max_plies,
             temperature=temperature,
+            final_temperature=final_temperature,
+            temperature_drop_plies=temperature_drop_plies,
             seed_offset=seed_offset,
             starting_board=starting_board,
             self_play_workers=self_play_workers,
         )
-        fresh_examples = [example for game in games for example in game.examples]
-        training_fresh_examples = augment_examples_color_flip(fresh_examples) if augment_color_flip else fresh_examples
-        latest_iteration_examples = len(fresh_examples)
+        raw_examples = [example for game in games for example in game.examples]
+        train_source_examples = [
+            example
+            for game in games
+            if game.stats.result != "1/2-1/2" or rng.random() < draw_training_weight
+            for example in game.examples
+        ]
+        training_fresh_examples = (
+            augment_examples_color_flip(train_source_examples) if augment_color_flip else train_source_examples
+        )
+        latest_iteration_examples = len(raw_examples)
         latest_iteration_training_examples = len(training_fresh_examples)
         examples += latest_iteration_examples
         training_examples += latest_iteration_training_examples

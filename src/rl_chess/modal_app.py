@@ -49,6 +49,8 @@ def train_remote(
     batch_size: int = 64,
     learning_rate: float = 1e-3,
     temperature: float = 1.0,
+    final_temperature: float | None = None,
+    temperature_drop_plies: int | None = None,
     hidden_channels: int = 64,
     residual_blocks: int = 4,
     checkpoint_dir: str | None = None,
@@ -57,12 +59,14 @@ def train_remote(
     stockfish_elo: int = 1320,
     validation_games: int = 2,
     validation_max_plies: int = 200,
+    validation_simulations: int | None = None,
     stockfish_movetime: float = 0.05,
     seed: int | None = None,
     starting_board_ascii: str | None = None,
     starting_turn: str = "white",
     self_play_workers: int = 8,
     augment_color_flip: bool = True,
+    draw_training_weight: float = 1.0,
     validate_each_checkpoint: bool = True,
 ) -> dict[str, object]:
     from rl_chess.env import ascii_to_board
@@ -71,6 +75,26 @@ def train_remote(
     from rl_chess.validation import validate_model_against_random, validate_model_against_stockfish
 
     model = PolicyValueNet(hidden_channels=hidden_channels, residual_blocks=residual_blocks)
+    starting_board = None if starting_board_ascii is None else ascii_to_board(starting_board_ascii, starting_turn == "white")
+    if validation_simulations is not None and validation_simulations <= 0:
+        raise ValueError("validation_simulations must be positive or None")
+    effective_validation_simulations = simulations if validation_simulations is None else validation_simulations
+
+    initial_validation: dict[str, object] | None = None
+    if validate_stockfish or validate_random:
+        initial_validation = _validate_model(
+            model=model,
+            validate_stockfish=validate_stockfish,
+            validate_random=validate_random,
+            stockfish_elo=stockfish_elo,
+            validation_games=validation_games,
+            validation_max_plies=validation_max_plies,
+            simulations=effective_validation_simulations,
+            stockfish_movetime=stockfish_movetime,
+            seed=seed,
+            validate_model_against_random=validate_model_against_random,
+            validate_model_against_stockfish=validate_model_against_stockfish,
+        )
 
     def report_progress(progress: dict[str, object]) -> None:
         print(
@@ -103,11 +127,14 @@ def train_remote(
         batch_size=batch_size,
         learning_rate=learning_rate,
         temperature=temperature,
+        final_temperature=final_temperature,
+        temperature_drop_plies=temperature_drop_plies,
         seed=seed,
         checkpoint_dir=checkpoint_dir,
-        starting_board=None if starting_board_ascii is None else ascii_to_board(starting_board_ascii, starting_turn == "white"),
+        starting_board=starting_board,
         self_play_workers=self_play_workers,
         augment_color_flip=augment_color_flip,
+        draw_training_weight=draw_training_weight,
         progress_callback=report_progress if checkpoint_dir is not None else None,
     )
     summary = _jsonable_metrics(metrics)
@@ -116,11 +143,19 @@ def train_remote(
             "hidden_channels": hidden_channels,
             "residual_blocks": residual_blocks,
             "checkpoint_dir": checkpoint_dir,
+            "starting_board_ascii": starting_board_ascii,
+            "starting_turn": starting_turn,
+            "final_temperature": final_temperature,
+            "temperature_drop_plies": temperature_drop_plies,
+            "validation_simulations": effective_validation_simulations,
             "self_play_workers": self_play_workers,
             "augment_color_flip": augment_color_flip,
+            "draw_training_weight": draw_training_weight,
             "validate_each_checkpoint": validate_each_checkpoint,
         }
     )
+    if initial_validation is not None:
+        summary["initial_validation"] = initial_validation
     if validate_each_checkpoint and metrics.checkpoint_paths and (validate_stockfish or validate_random):
         summary["checkpoint_validations"] = [
             _validate_checkpoint(
@@ -130,7 +165,7 @@ def train_remote(
                 stockfish_elo=stockfish_elo,
                 validation_games=validation_games,
                 validation_max_plies=validation_max_plies,
-                simulations=simulations,
+                simulations=effective_validation_simulations,
                 stockfish_movetime=stockfish_movetime,
                 seed=None if seed is None else seed + checkpoint_index,
                 load_checkpoint_model=load_checkpoint_model,
@@ -145,7 +180,7 @@ def train_remote(
             elo=stockfish_elo,
             games=validation_games,
             max_plies=validation_max_plies,
-            simulations=simulations,
+            simulations=effective_validation_simulations,
             stockfish_movetime=stockfish_movetime,
             seed=seed,
         )
@@ -159,6 +194,7 @@ def train_remote(
                 "validation_capped_draws": validation.capped_draws,
                 "validation_score": validation.score,
                 "validation_passed": validation.passed,
+                "validation_wins_more_than_losses": validation.wins_more_than_losses,
             }
         )
     if validate_random:
@@ -166,7 +202,7 @@ def train_remote(
             model=model,
             games=validation_games,
             max_plies=validation_max_plies,
-            simulations=simulations,
+            simulations=effective_validation_simulations,
             seed=seed,
         )
         summary.update(
@@ -178,6 +214,7 @@ def train_remote(
                 "random_validation_capped_draws": validation.capped_draws,
                 "random_validation_score": validation.score,
                 "random_validation_passed": validation.passed,
+                "random_validation_wins_more_than_losses": validation.wins_more_than_losses,
             }
         )
     _persist_summary(checkpoint_dir, summary)
@@ -193,11 +230,12 @@ def _validation_summary(prefix: str, validation: Any) -> dict[str, object]:
         f"{prefix}_capped_draws": validation.capped_draws,
         f"{prefix}_score": validation.score,
         f"{prefix}_passed": validation.passed,
+        f"{prefix}_wins_more_than_losses": validation.wins_more_than_losses,
     }
 
 
-def _validate_checkpoint(
-    path: Path,
+def _validate_model(
+    model: Any,
     validate_stockfish: bool,
     validate_random: bool,
     stockfish_elo: int,
@@ -206,12 +244,10 @@ def _validate_checkpoint(
     simulations: int,
     stockfish_movetime: float,
     seed: int | None,
-    load_checkpoint_model: Any,
     validate_model_against_random: Any,
     validate_model_against_stockfish: Any,
 ) -> dict[str, object]:
-    model = load_checkpoint_model(path)
-    result: dict[str, object] = {"checkpoint_path": str(path)}
+    result: dict[str, object] = {}
     if validate_random:
         random_validation = validate_model_against_random(
             model=model,
@@ -233,6 +269,40 @@ def _validate_checkpoint(
         )
         result["stockfish_elo"] = stockfish_elo
         result.update(_validation_summary("stockfish", stockfish_validation))
+    return result
+
+
+def _validate_checkpoint(
+    path: Path,
+    validate_stockfish: bool,
+    validate_random: bool,
+    stockfish_elo: int,
+    validation_games: int,
+    validation_max_plies: int,
+    simulations: int,
+    stockfish_movetime: float,
+    seed: int | None,
+    load_checkpoint_model: Any,
+    validate_model_against_random: Any,
+    validate_model_against_stockfish: Any,
+) -> dict[str, object]:
+    model = load_checkpoint_model(path)
+    result: dict[str, object] = {"checkpoint_path": str(path)}
+    result.update(
+        _validate_model(
+            model=model,
+            validate_stockfish=validate_stockfish,
+            validate_random=validate_random,
+            stockfish_elo=stockfish_elo,
+            validation_games=validation_games,
+            validation_max_plies=validation_max_plies,
+            simulations=simulations,
+            stockfish_movetime=stockfish_movetime,
+            seed=seed,
+            validate_model_against_random=validate_model_against_random,
+            validate_model_against_stockfish=validate_model_against_stockfish,
+        )
+    )
     return result
 
 
@@ -275,6 +345,8 @@ def main(
     batch_size: int = 64,
     learning_rate: float = 1e-3,
     temperature: float = 1.0,
+    final_temperature: float | None = None,
+    temperature_drop_plies: int | None = None,
     hidden_channels: int = 64,
     residual_blocks: int = 4,
     checkpoint_dir: str | None = None,
@@ -283,12 +355,14 @@ def main(
     stockfish_elo: int = 1320,
     validation_games: int = 2,
     validation_max_plies: int = 200,
+    validation_simulations: int | None = None,
     stockfish_movetime: float = 0.05,
     seed: int | None = None,
     starting_board_ascii: str | None = None,
     starting_turn: str = "white",
     self_play_workers: int = 8,
     augment_color_flip: bool = True,
+    draw_training_weight: float = 1.0,
     validate_each_checkpoint: bool = True,
     wait: bool = False,
 ) -> None:
@@ -301,6 +375,8 @@ def main(
             batch_size=batch_size,
             learning_rate=learning_rate,
             temperature=temperature,
+            final_temperature=final_temperature,
+            temperature_drop_plies=temperature_drop_plies,
             hidden_channels=hidden_channels,
             residual_blocks=residual_blocks,
             checkpoint_dir=checkpoint_dir,
@@ -309,12 +385,14 @@ def main(
             stockfish_elo=stockfish_elo,
             validation_games=validation_games,
             validation_max_plies=validation_max_plies,
+            validation_simulations=validation_simulations,
             stockfish_movetime=stockfish_movetime,
             seed=seed,
             starting_board_ascii=starting_board_ascii,
             starting_turn=starting_turn,
             self_play_workers=self_play_workers,
             augment_color_flip=augment_color_flip,
+            draw_training_weight=draw_training_weight,
             validate_each_checkpoint=validate_each_checkpoint,
     )
     if wait:
