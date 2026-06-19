@@ -292,6 +292,7 @@ def train(
     augment_color_flip: bool = True,
     draw_training_weight: float = 1.0,
     min_draw_games_for_training: int = 0,
+    value_loss_weight: float = 1.0,
     training_device: str | torch.device = "cpu",
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     event_callback: Callable[[dict[str, Any]], None] | None = None,
@@ -322,6 +323,8 @@ def train(
         raise ValueError("draw_training_weight must be in [0, 1]")
     if min_draw_games_for_training < 0:
         raise ValueError("min_draw_games_for_training must be non-negative")
+    if value_loss_weight < 0:
+        raise ValueError("value_loss_weight must be non-negative")
 
     resolved_training_device = _resolve_training_device(training_device)
     resolved_training_device_name = str(resolved_training_device)
@@ -421,7 +424,7 @@ def train(
             if not training_fresh_examples:
                 continue
             batch = rng.sample(training_fresh_examples, k=min(batch_size, len(training_fresh_examples)))
-            stats = train_batch(model, optimizer, batch)
+            stats = train_batch(model, optimizer, batch, value_loss_weight=value_loss_weight)
             losses.append(stats.total_loss)
             policy_losses.append(stats.policy_loss)
             value_losses.append(stats.value_loss)

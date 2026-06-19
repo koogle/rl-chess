@@ -69,6 +69,7 @@ def train_remote(
     augment_color_flip: bool = True,
     draw_training_weight: float = 1.0,
     min_draw_games_for_training: int = 0,
+    value_loss_weight: float = 1.0,
     training_device: str = "auto",
     validate_each_checkpoint: bool = True,
 ) -> dict[str, object]:
@@ -159,6 +160,7 @@ def train_remote(
         augment_color_flip=augment_color_flip,
         draw_training_weight=draw_training_weight,
         min_draw_games_for_training=min_draw_games_for_training,
+        value_loss_weight=value_loss_weight,
         training_device=training_device,
         progress_callback=report_progress if checkpoint_dir is not None else None,
         event_callback=report_event,
@@ -178,6 +180,7 @@ def train_remote(
             "augment_color_flip": augment_color_flip,
             "draw_training_weight": draw_training_weight,
             "min_draw_games_for_training": min_draw_games_for_training,
+            "value_loss_weight": value_loss_weight,
             "requested_training_device": training_device,
             "validate_each_checkpoint": validate_each_checkpoint,
         }
@@ -406,6 +409,7 @@ def main(
     augment_color_flip: bool = True,
     draw_training_weight: float = 1.0,
     min_draw_games_for_training: int = 0,
+    value_loss_weight: float = 1.0,
     training_device: str = "auto",
     validate_each_checkpoint: bool = True,
     wait: bool = False,
@@ -438,6 +442,7 @@ def main(
             augment_color_flip=augment_color_flip,
             draw_training_weight=draw_training_weight,
             min_draw_games_for_training=min_draw_games_for_training,
+            value_loss_weight=value_loss_weight,
             training_device=training_device,
             validate_each_checkpoint=validate_each_checkpoint,
     )

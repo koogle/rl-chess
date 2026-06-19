@@ -198,6 +198,7 @@ def test_modal_remote_training_accepts_ascii_starting_board():
     assert summary["residual_blocks"] == 0
     assert summary["requested_training_device"] == "auto"
     assert summary["training_device"] in {"cpu", "cuda"}
+    assert summary["value_loss_weight"] == 1.0
 
 
 def test_policy_value_trainer_reduces_loss_on_repeated_target():
@@ -359,7 +360,7 @@ def test_training_uses_only_fresh_iteration_examples_for_updates(monkeypatch):
             stats=train_module.GameStats(plies=1, result="1/2-1/2"),
         )
 
-    def fake_train_batch(model, optimizer, batch):
+    def fake_train_batch(model, optimizer, batch, value_loss_weight=1.0):
         batches.append([next(iter(example.policy_target)) for example in batch])
         return train_module.TrainStats(total_loss=1.0, policy_loss=1.0, value_loss=0.0)
 
@@ -400,7 +401,7 @@ def test_training_can_use_color_flipped_training_examples(monkeypatch):
             stats=train_module.GameStats(plies=1, result="1/2-1/2"),
         )
 
-    def fake_train_batch(model, optimizer, batch):
+    def fake_train_batch(model, optimizer, batch, value_loss_weight=1.0):
         batches.append(sorted(next(iter(example.policy_target)) for example in batch))
         return train_module.TrainStats(total_loss=1.0, policy_loss=1.0, value_loss=0.0)
 
@@ -456,7 +457,7 @@ def test_training_can_exclude_draw_games_from_updates(monkeypatch):
     def fake_play_self_game(*args, **kwargs):
         return generated.pop(0)
 
-    def fake_train_batch(model, optimizer, batch):
+    def fake_train_batch(model, optimizer, batch, value_loss_weight=1.0):
         batches.append([next(iter(example.policy_target)) for example in batch])
         return train_module.TrainStats(total_loss=1.0, policy_loss=1.0, value_loss=0.0)
 
@@ -512,7 +513,7 @@ def test_training_can_keep_minimum_draw_games_when_all_games_draw(monkeypatch):
     def fake_play_self_game(*args, **kwargs):
         return generated.pop(0)
 
-    def fake_train_batch(model, optimizer, batch):
+    def fake_train_batch(model, optimizer, batch, value_loss_weight=1.0):
         batches.append([next(iter(example.policy_target)) for example in batch])
         return train_module.TrainStats(total_loss=1.0, policy_loss=1.0, value_loss=0.0)
 
@@ -536,6 +537,48 @@ def test_training_can_keep_minimum_draw_games_when_all_games_draw(monkeypatch):
     assert metrics.examples == 2
     assert metrics.training_examples == 1
     assert batches in [[["e2e4"]], [["d2d4"]]]
+
+
+def test_training_passes_value_loss_weight_to_batches(monkeypatch):
+    import importlib
+
+    train_module = importlib.import_module("rl_chess.train")
+
+    board = chess.Board()
+    example = TrainingExample.from_board(
+        board=board,
+        policy_target={"e2e4": 1.0},
+        value_target=1.0,
+    )
+    seen_weights = []
+
+    def fake_play_self_game(*args, **kwargs):
+        return train_module.SelfPlayGame(
+            examples=[example],
+            stats=train_module.GameStats(plies=1, result="1-0"),
+        )
+
+    def fake_train_batch(model, optimizer, batch, value_loss_weight=1.0):
+        seen_weights.append(value_loss_weight)
+        return train_module.TrainStats(total_loss=1.0, policy_loss=1.0, value_loss=0.0)
+
+    monkeypatch.setattr(train_module, "play_self_game", fake_play_self_game)
+    monkeypatch.setattr(train_module, "train_batch", fake_train_batch)
+
+    train(
+        model=PolicyValueNet(hidden_channels=8),
+        iterations=1,
+        games_per_iteration=1,
+        simulations=1,
+        train_steps=2,
+        batch_size=16,
+        self_play_workers=1,
+        augment_color_flip=False,
+        value_loss_weight=3.0,
+        seed=1,
+    )
+
+    assert seen_weights == [3.0, 3.0]
 
 
 def test_training_metrics_do_not_expose_replay_buffer():
@@ -666,6 +709,7 @@ def test_training_rejects_invalid_public_knobs():
         {"draw_training_weight": -0.1},
         {"draw_training_weight": 1.1},
         {"min_draw_games_for_training": -1},
+        {"value_loss_weight": -1.0},
         {"training_device": "definitely-not-a-device"},
     ]
     for kwargs in bad_configs:

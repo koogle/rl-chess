@@ -406,3 +406,24 @@ PY
 - Verification command: `uv run pytest -q`
 - Verification result: `39 passed, 2 warnings`.
 - Status at last check: active detached run in iteration 2 self-play, final `wins > losses` result pending.
+
+### 2026-06-18 17:07:56 PDT — Early checkpoint Stockfish diagnostics
+
+- Checkpoint download commands: `uv run modal volume get rl-chess-checkpoints /fullstart-selfplay-vectorized-20260618-1658/iteration-0001.pt /tmp/rl-chess-checkpoints/iteration-0001.pt`; `uv run modal volume get rl-chess-checkpoints /fullstart-selfplay-vectorized-20260618-1658/iteration-0002.pt /tmp/rl-chess-checkpoints/iteration-0002.pt`; `uv run modal volume get rl-chess-checkpoints /fullstart-selfplay-vectorized-20260618-1658/iteration-0003.pt /tmp/rl-chess-checkpoints/iteration-0003.pt`.
+- Checkpoint 1 validation command: `uv run python -c "from rl_chess.train import load_checkpoint_model; from rl_chess.validation import validate_model_against_stockfish; model = load_checkpoint_model('/tmp/rl-chess-checkpoints/iteration-0001.pt'); result = validate_model_against_stockfish(model, elo=1, games=6, max_plies=300, simulations=8, stockfish_movetime=0.001, seed=20260619); print({'wins': result.wins, 'losses': result.losses, 'draws': result.draws, 'capped_draws': result.capped_draws, 'score': result.score, 'wins_more_than_losses': result.wins_more_than_losses})"`
+- Checkpoint 1 result: `0W/5L/1D`, score `0.08333333333333333`, `wins_more_than_losses=False`.
+- Checkpoint 2 validation command: `uv run python -c "from rl_chess.train import load_checkpoint_model; from rl_chess.validation import validate_model_against_stockfish; model = load_checkpoint_model('/tmp/rl-chess-checkpoints/iteration-0002.pt'); result = validate_model_against_stockfish(model, elo=1, games=6, max_plies=300, simulations=8, stockfish_movetime=0.001, seed=20260620); print({'wins': result.wins, 'losses': result.losses, 'draws': result.draws, 'capped_draws': result.capped_draws, 'score': result.score, 'wins_more_than_losses': result.wins_more_than_losses})"`
+- Checkpoint 2 result: `0W/3L/3D`, score `0.25`, `wins_more_than_losses=False`.
+- Checkpoint 3 validation command: `uv run python -c "from rl_chess.train import load_checkpoint_model; from rl_chess.validation import validate_model_against_stockfish; model = load_checkpoint_model('/tmp/rl-chess-checkpoints/iteration-0003.pt'); result = validate_model_against_stockfish(model, elo=1, games=6, max_plies=300, simulations=8, stockfish_movetime=0.001, seed=20260621); print({'wins': result.wins, 'losses': result.losses, 'draws': result.draws, 'capped_draws': result.capped_draws, 'score': result.score, 'wins_more_than_losses': result.wins_more_than_losses})"`
+- Checkpoint 3 result: `0W/4L/2D`, score `0.16666666666666666`, `wins_more_than_losses=False`.
+- Higher-search spot checks: checkpoint 1 at `simulations=16` scored `0W/3L/1D` and at `simulations=32` scored `0W/4L/0D`; checkpoint 2 at `simulations=16` and `32` both scored `0W/4L/0D`.
+- Interpretation: the first three checkpoints do not satisfy the goal. Checkpoint 2 improved the draw rate at the run's validation budget, but no checkpoint has produced a Stockfish win yet.
+
+### 2026-06-18 17:12:05 PDT — Value-loss weighting after draw collapse
+
+- Methodology change: exposed `value_loss_weight` through the shared training loop and Modal runner. This keeps the data source self-play-only, but allows follow-up runs to put more gradient pressure on decisive terminal outcomes instead of mostly imitating draw-heavy policies.
+- Stopped draw-collapsed run command: `uv run modal app stop --yes ap-3IDM5dg6ChzrjowDJhKz5z`.
+- Stopped run result: by checkpoint 8 the active run had cumulative `result_counts={"1/2-1/2": 216, "0-1": 24, "1-0": 16}` and iteration 8 itself was all draws. Checkpoint 8 validation command: `uv run python -c "from rl_chess.train import load_checkpoint_model; from rl_chess.validation import validate_model_against_stockfish; model = load_checkpoint_model('/tmp/rl-chess-checkpoints/iteration-0008.pt'); result = validate_model_against_stockfish(model, elo=1, games=8, max_plies=300, simulations=8, stockfish_movetime=0.001, seed=20260628); print({'wins': result.wins, 'losses': result.losses, 'draws': result.draws, 'capped_draws': result.capped_draws, 'score': result.score, 'wins_more_than_losses': result.wins_more_than_losses})"`.
+- Checkpoint 8 validation result: `0W/6L/2D`, score `0.125`, `wins_more_than_losses=False`.
+- Verification command: `uv run pytest -q`.
+- Verification result: `40 passed, 2 warnings`.
