@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable, Sequence
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 import multiprocessing
 from pathlib import Path
@@ -168,6 +168,7 @@ def generate_self_play_batch(
     starting_board: chess.Board | None = None,
     self_play_workers: int = 1,
     self_play_start_method: str | None = None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[SelfPlayGame]:
     """Generate one fresh self-play batch from a frozen snapshot of the latest model."""
 
@@ -178,8 +179,10 @@ def generate_self_play_batch(
 
     seeds = [None if seed_offset is None else seed_offset + game_idx for game_idx in range(games)]
     if self_play_workers == 1 or games == 1:
-        return [
-            play_self_game(
+        completed: list[SelfPlayGame] = []
+        started_at = time.perf_counter()
+        for game_index, game_seed in enumerate(seeds):
+            game = play_self_game(
                 model,
                 simulations=simulations,
                 max_plies=max_plies,
@@ -189,39 +192,64 @@ def generate_self_play_batch(
                 seed=game_seed,
                 starting_board=starting_board,
             )
-            for game_seed in seeds
-        ]
+            completed.append(game)
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "game_index": game_index,
+                        "completed_games": game_index + 1,
+                        "total_games": games,
+                        "plies": game.stats.plies,
+                        "result": game.stats.result,
+                        "elapsed_seconds": time.perf_counter() - started_at,
+                    }
+                )
+        return completed
 
     workers = min(self_play_workers, games)
-    chunks = [seeds[index::workers] for index in range(workers)]
     state_dict = _model_snapshot(model)
+    started_at = time.perf_counter()
+    ordered: list[SelfPlayGame | None] = [None] * games
     with ProcessPoolExecutor(
         max_workers=workers,
         mp_context=_self_play_process_context(self_play_start_method),
     ) as executor:
-        futures = [
+        futures = {
             executor.submit(
                 _play_chunk,
                 state_dict=state_dict,
                 hidden_channels=model.hidden_channels,
                 residual_blocks=model.residual_blocks,
-                seeds=chunk,
+                seeds=[game_seed],
                 simulations=simulations,
                 max_plies=max_plies,
                 temperature=temperature,
                 final_temperature=final_temperature,
                 temperature_drop_plies=temperature_drop_plies,
                 starting_board=starting_board,
-            )
-            for chunk in chunks
-        ]
-        games_by_chunk = [future.result() for future in futures]
-    ordered: list[SelfPlayGame] = []
-    for game_index in range(games):
-        chunk_index = game_index % workers
-        position_in_chunk = game_index // workers
-        ordered.append(games_by_chunk[chunk_index][position_in_chunk])
-    return ordered
+            ): game_index
+            for game_index, game_seed in enumerate(seeds)
+        }
+        completed_games = 0
+        for future in as_completed(futures):
+            game_index = futures[future]
+            game = future.result()[0]
+            ordered[game_index] = game
+            completed_games += 1
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "game_index": game_index,
+                        "completed_games": completed_games,
+                        "total_games": games,
+                        "plies": game.stats.plies,
+                        "result": game.stats.result,
+                        "elapsed_seconds": time.perf_counter() - started_at,
+                    }
+                )
+    if any(game is None for game in ordered):
+        raise RuntimeError("self-play batch completed with missing games")
+    return [game for game in ordered if game is not None]
 
 
 def _select_training_games(
@@ -331,6 +359,12 @@ def train(
                 }
             )
         self_play_start_method = "spawn" if resolved_training_device.type == "cuda" else None
+
+        def report_self_play_game(progress: dict[str, Any]) -> None:
+            if event_callback is None:
+                return
+            event_callback({"phase": "self_play_game_complete", "iteration": iteration + 1, **progress})
+
         games = generate_self_play_batch(
             model=model,
             games=games_per_iteration,
@@ -343,6 +377,7 @@ def train(
             starting_board=starting_board,
             self_play_workers=self_play_workers,
             self_play_start_method=self_play_start_method,
+            progress_callback=report_self_play_game if event_callback is not None else None,
         )
         self_play_elapsed_seconds = time.perf_counter() - iteration_start
         raw_examples = [example for game in games for example in game.examples]

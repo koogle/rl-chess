@@ -395,3 +395,14 @@ PY
 - Modal run: https://modal.com/apps/koogle-frick/main/ap-3IDM5dg6ChzrjowDJhKz5z; function call `fc-01KVEJR5BMQWPMWJACASMPNRCB`; checkpoint dir `/checkpoints/fullstart-selfplay-vectorized-20260618-1658`.
 - Initial validation result: untrained model scored `0W/8L/2D`, score `0.1`, `wins_more_than_losses=False` against weakest Stockfish before training.
 - Status at launch: active detached run in iteration 1 self-play with `training_device=cuda`, final `wins > losses` result pending.
+
+### 2026-06-18 17:03:24 PDT — Per-game self-play scheduling and first vectorized checkpoint
+
+- Operational change: multi-worker self-play now schedules one game per future and emits `self_play_game_complete` lifecycle events. This keeps the same full-start self-play data source and target, but avoids opaque multi-game worker chunks and makes long batches inspectable while they run.
+- Active run iteration 1 result: Modal function call `fc-01KVEJR5BMQWPMWJACASMPNRCB` completed iteration 1 with `8986` raw examples, `4374` selected training examples, `result_counts={"1/2-1/2": 20, "0-1": 4, "1-0": 8}`, average plies `280.8125`, and `training_device=cuda`.
+- Active run training result: 64 updates took `25.757469635000007s`; latest loss `3.5037975311279297`, policy loss `3.0354602336883545`, value loss `0.4683372974395752`.
+- Checkpoint verification command: `uv run modal volume ls rl-chess-checkpoints /fullstart-selfplay-vectorized-20260618-1658`
+- Checkpoint verification result: `fullstart-selfplay-vectorized-20260618-1658/iteration-0001.pt` is visible in the Modal volume after per-checkpoint volume commit.
+- Verification command: `uv run pytest -q`
+- Verification result: `39 passed, 2 warnings`.
+- Status at last check: active detached run in iteration 2 self-play, final `wins > losses` result pending.

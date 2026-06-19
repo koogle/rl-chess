@@ -638,11 +638,15 @@ def test_training_reports_lifecycle_events():
 
     assert [event["phase"] for event in events] == [
         "self_play_start",
+        "self_play_game_complete",
         "self_play_complete",
         "train_updates_complete",
     ]
-    assert events[1]["iteration_examples"] == 1
-    assert events[2]["updates"] == 1
+    assert events[1]["completed_games"] == 1
+    assert events[1]["total_games"] == 1
+    assert events[1]["plies"] == 1
+    assert events[2]["iteration_examples"] == 1
+    assert events[3]["updates"] == 1
 
 
 def test_training_rejects_invalid_public_knobs():
