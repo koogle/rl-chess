@@ -4,6 +4,7 @@ import torch
 
 from rl_chess.env import ascii_to_board, board_to_ascii, result_to_white_reward
 from rl_chess.nn_model import (
+    ACTION_SIZE,
     BLACK_KINGSIDE_CASTLING_PLANE,
     CAN_CLAIM_FIFTY_MOVES_PLANE,
     EN_PASSANT_PLANE,
@@ -13,7 +14,7 @@ from rl_chess.nn_model import (
     WHITE_KINGSIDE_CASTLING_PLANE,
     train_batch,
 )
-from rl_chess.puct_mcts import PUCTMCTS, PolicyValueEvaluator
+from rl_chess.puct_mcts import DRAW_HISTORY_PLIES, PUCTMCTS, PolicyValueEvaluator
 from rl_chess.self_play import TrainingExample, augment_examples_color_flip, mirror_move_uci, play_self_game, sample_policy
 from rl_chess.train import checkpoint_metrics, load_checkpoint_model, train
 from rl_chess.validation import (
@@ -134,6 +135,25 @@ def test_puct_preserves_board_history_inside_tree():
     assert max(evaluator.depths) >= 3
 
 
+def test_bounded_history_copy_preserves_recent_repetition_claims():
+    board = chess.Board()
+    for move in [
+        "g1f3",
+        "g8f6",
+        "f3g1",
+        "f6g8",
+        "g1f3",
+        "g8f6",
+        "f3g1",
+    ]:
+        board.push(chess.Move.from_uci(move))
+
+    copied = board.copy(stack=DRAW_HISTORY_PLIES)
+    copied.push(chess.Move.from_uci("f6g8"))
+
+    assert copied.can_claim_threefold_repetition()
+
+
 def test_ascii_board_parser_reconstructs_python_chess_position():
     board = ascii_to_board(KQK_BLACK_TO_MOVE, turn=chess.BLACK)
     assert board.turn == chess.BLACK
@@ -176,6 +196,9 @@ def test_modal_remote_training_accepts_ascii_starting_board():
     assert summary["games"] == 1
     assert summary["hidden_channels"] == 8
     assert summary["residual_blocks"] == 0
+    assert summary["requested_training_device"] == "auto"
+    assert summary["training_device"] in {"cpu", "cuda"}
+    assert summary["value_loss_weight"] == 1.0
 
 
 def test_policy_value_trainer_reduces_loss_on_repeated_target():
@@ -194,6 +217,36 @@ def test_policy_value_trainer_reduces_loss_on_repeated_target():
     for _ in range(12):
         last = train_batch(model, optimizer, [example]).total_loss
     assert last < first
+
+
+def test_policy_loss_matches_manual_legal_move_cross_entropy():
+    board = chess.Board()
+    examples = [
+        TrainingExample(
+            state_ascii=board_to_ascii(board),
+            turn=board.turn,
+            policy_target={"e2e4": 0.25, "d2d4": 0.75},
+            value_target=1.0,
+        ),
+        TrainingExample(
+            state_ascii=board_to_ascii(board),
+            turn=board.turn,
+            policy_target={"g1f3": 0.5, "c2c4": 0.25, "b1c3": 0.25},
+            value_target=-1.0,
+        ),
+    ]
+    logits = torch.randn((len(examples), ACTION_SIZE), generator=torch.Generator().manual_seed(7))
+
+    actual = PolicyValueNet.policy_loss(logits, examples)
+    expected_losses = []
+    for row, example in enumerate(examples):
+        moves = tuple(example.policy_target)
+        indices = torch.tensor([PolicyValueNet.action_index(move) for move in moves], dtype=torch.long)
+        target = torch.tensor([example.policy_target[move] for move in moves], dtype=torch.float32)
+        target = target / target.sum()
+        expected_losses.append(-(target * torch.nn.functional.log_softmax(logits[row, indices], dim=0)).sum())
+
+    assert torch.allclose(actual, torch.stack(expected_losses).mean())
 
 
 def test_model_is_the_puct_evaluator():
@@ -239,6 +292,22 @@ def test_self_play_can_be_uncapped_until_terminal_from_mate_in_one():
 def test_self_play_rejects_safety_cap_instead_of_truncating_game():
     with pytest.raises(RuntimeError, match="non-terminal self-play game reached safety cap"):
         play_self_game(E4Evaluator(), simulations=1, max_plies=1, seed=3)
+
+
+def test_self_play_can_drop_temperature_after_opening():
+    board = ascii_to_board(KQK_BLACK_TO_MOVE, turn=chess.BLACK)
+    game = play_self_game(
+        E4Evaluator(),
+        simulations=1,
+        max_plies=1,
+        temperature=1.0,
+        final_temperature=0.0,
+        temperature_drop_plies=0,
+        seed=3,
+        starting_board=board,
+    )
+
+    assert game.stats.plies == 1
 
 
 def test_training_metrics_do_not_report_truncation():
@@ -291,7 +360,7 @@ def test_training_uses_only_fresh_iteration_examples_for_updates(monkeypatch):
             stats=train_module.GameStats(plies=1, result="1/2-1/2"),
         )
 
-    def fake_train_batch(model, optimizer, batch):
+    def fake_train_batch(model, optimizer, batch, value_loss_weight=1.0):
         batches.append([next(iter(example.policy_target)) for example in batch])
         return train_module.TrainStats(total_loss=1.0, policy_loss=1.0, value_loss=0.0)
 
@@ -332,7 +401,7 @@ def test_training_can_use_color_flipped_training_examples(monkeypatch):
             stats=train_module.GameStats(plies=1, result="1/2-1/2"),
         )
 
-    def fake_train_batch(model, optimizer, batch):
+    def fake_train_batch(model, optimizer, batch, value_loss_weight=1.0):
         batches.append(sorted(next(iter(example.policy_target)) for example in batch))
         return train_module.TrainStats(total_loss=1.0, policy_loss=1.0, value_loss=0.0)
 
@@ -357,6 +426,161 @@ def test_training_can_use_color_flipped_training_examples(monkeypatch):
     assert batches == [["e2e4", "e7e5"]]
 
 
+def test_training_can_exclude_draw_games_from_updates(monkeypatch):
+    import importlib
+
+    train_module = importlib.import_module("rl_chess.train")
+
+    board = chess.Board()
+    draw_example = TrainingExample.from_board(
+        board=board,
+        policy_target={"e2e4": 1.0},
+        value_target=0.0,
+    )
+    win_example = TrainingExample.from_board(
+        board=board,
+        policy_target={"d2d4": 1.0},
+        value_target=1.0,
+    )
+    batches = []
+    generated = [
+        train_module.SelfPlayGame(
+            examples=[draw_example],
+            stats=train_module.GameStats(plies=1, result="1/2-1/2"),
+        ),
+        train_module.SelfPlayGame(
+            examples=[win_example],
+            stats=train_module.GameStats(plies=1, result="1-0"),
+        ),
+    ]
+
+    def fake_play_self_game(*args, **kwargs):
+        return generated.pop(0)
+
+    def fake_train_batch(model, optimizer, batch, value_loss_weight=1.0):
+        batches.append([next(iter(example.policy_target)) for example in batch])
+        return train_module.TrainStats(total_loss=1.0, policy_loss=1.0, value_loss=0.0)
+
+    monkeypatch.setattr(train_module, "play_self_game", fake_play_self_game)
+    monkeypatch.setattr(train_module, "train_batch", fake_train_batch)
+
+    metrics = train(
+        model=PolicyValueNet(hidden_channels=8),
+        iterations=1,
+        games_per_iteration=2,
+        simulations=1,
+        train_steps=1,
+        batch_size=16,
+        self_play_workers=1,
+        augment_color_flip=False,
+        draw_training_weight=0.0,
+        seed=1,
+    )
+
+    assert metrics.examples == 2
+    assert metrics.training_examples == 1
+    assert batches == [["d2d4"]]
+
+
+def test_training_can_keep_minimum_draw_games_when_all_games_draw(monkeypatch):
+    import importlib
+
+    train_module = importlib.import_module("rl_chess.train")
+
+    board = chess.Board()
+    first_draw = TrainingExample.from_board(
+        board=board,
+        policy_target={"e2e4": 1.0},
+        value_target=0.0,
+    )
+    second_draw = TrainingExample.from_board(
+        board=board,
+        policy_target={"d2d4": 1.0},
+        value_target=0.0,
+    )
+    batches = []
+    generated = [
+        train_module.SelfPlayGame(
+            examples=[first_draw],
+            stats=train_module.GameStats(plies=1, result="1/2-1/2"),
+        ),
+        train_module.SelfPlayGame(
+            examples=[second_draw],
+            stats=train_module.GameStats(plies=1, result="1/2-1/2"),
+        ),
+    ]
+
+    def fake_play_self_game(*args, **kwargs):
+        return generated.pop(0)
+
+    def fake_train_batch(model, optimizer, batch, value_loss_weight=1.0):
+        batches.append([next(iter(example.policy_target)) for example in batch])
+        return train_module.TrainStats(total_loss=1.0, policy_loss=1.0, value_loss=0.0)
+
+    monkeypatch.setattr(train_module, "play_self_game", fake_play_self_game)
+    monkeypatch.setattr(train_module, "train_batch", fake_train_batch)
+
+    metrics = train(
+        model=PolicyValueNet(hidden_channels=8),
+        iterations=1,
+        games_per_iteration=2,
+        simulations=1,
+        train_steps=1,
+        batch_size=16,
+        self_play_workers=1,
+        augment_color_flip=False,
+        draw_training_weight=0.0,
+        min_draw_games_for_training=1,
+        seed=1,
+    )
+
+    assert metrics.examples == 2
+    assert metrics.training_examples == 1
+    assert batches in [[["e2e4"]], [["d2d4"]]]
+
+
+def test_training_passes_value_loss_weight_to_batches(monkeypatch):
+    import importlib
+
+    train_module = importlib.import_module("rl_chess.train")
+
+    board = chess.Board()
+    example = TrainingExample.from_board(
+        board=board,
+        policy_target={"e2e4": 1.0},
+        value_target=1.0,
+    )
+    seen_weights = []
+
+    def fake_play_self_game(*args, **kwargs):
+        return train_module.SelfPlayGame(
+            examples=[example],
+            stats=train_module.GameStats(plies=1, result="1-0"),
+        )
+
+    def fake_train_batch(model, optimizer, batch, value_loss_weight=1.0):
+        seen_weights.append(value_loss_weight)
+        return train_module.TrainStats(total_loss=1.0, policy_loss=1.0, value_loss=0.0)
+
+    monkeypatch.setattr(train_module, "play_self_game", fake_play_self_game)
+    monkeypatch.setattr(train_module, "train_batch", fake_train_batch)
+
+    train(
+        model=PolicyValueNet(hidden_channels=8),
+        iterations=1,
+        games_per_iteration=1,
+        simulations=1,
+        train_steps=2,
+        batch_size=16,
+        self_play_workers=1,
+        augment_color_flip=False,
+        value_loss_weight=3.0,
+        seed=1,
+    )
+
+    assert seen_weights == [3.0, 3.0]
+
+
 def test_training_metrics_do_not_expose_replay_buffer():
     metrics = train(
         model=PolicyValueNet(hidden_channels=8),
@@ -373,6 +597,27 @@ def test_training_metrics_do_not_expose_replay_buffer():
     assert checkpoint_metrics(metrics)["iteration_examples"] == 1
     assert checkpoint_metrics(metrics)["iteration_training_examples"] == 2
     assert checkpoint_metrics(metrics)["result_counts"] == {"1/2-1/2": 1}
+    assert checkpoint_metrics(metrics)["training_device"] == "cpu"
+
+
+def test_training_reports_resolved_training_device():
+    events = []
+    metrics = train(
+        model=PolicyValueNet(hidden_channels=8),
+        iterations=1,
+        games_per_iteration=1,
+        simulations=2,
+        max_plies=1,
+        train_steps=1,
+        starting_board=ascii_to_board(KQK_BLACK_TO_MOVE, turn=chess.BLACK),
+        seed=3,
+        training_device="auto",
+        event_callback=events.append,
+    )
+
+    expected = "cuda" if torch.cuda.is_available() else "cpu"
+    assert metrics.training_device == expected
+    assert events[0]["training_device"] == expected
 
 
 def test_training_writes_iteration_checkpoints(tmp_path):
@@ -420,6 +665,33 @@ def test_training_reports_progress_after_each_checkpoint(tmp_path):
     assert progress[-1]["updates"] == 2
 
 
+def test_training_reports_lifecycle_events():
+    events = []
+    train(
+        model=PolicyValueNet(hidden_channels=8),
+        iterations=1,
+        games_per_iteration=1,
+        simulations=2,
+        max_plies=1,
+        train_steps=1,
+        starting_board=ascii_to_board(KQK_BLACK_TO_MOVE, turn=chess.BLACK),
+        seed=3,
+        event_callback=events.append,
+    )
+
+    assert [event["phase"] for event in events] == [
+        "self_play_start",
+        "self_play_game_complete",
+        "self_play_complete",
+        "train_updates_complete",
+    ]
+    assert events[1]["completed_games"] == 1
+    assert events[1]["total_games"] == 1
+    assert events[1]["plies"] == 1
+    assert events[2]["iteration_examples"] == 1
+    assert events[3]["updates"] == 1
+
+
 def test_training_rejects_invalid_public_knobs():
     model = PolicyValueNet(hidden_channels=8)
     bad_configs = [
@@ -432,6 +704,13 @@ def test_training_rejects_invalid_public_knobs():
         {"self_play_workers": 0},
         {"learning_rate": 0.0},
         {"temperature": -1.0},
+        {"final_temperature": -1.0},
+        {"temperature_drop_plies": -1},
+        {"draw_training_weight": -0.1},
+        {"draw_training_weight": 1.1},
+        {"min_draw_games_for_training": -1},
+        {"value_loss_weight": -1.0},
+        {"training_device": "definitely-not-a-device"},
     ]
     for kwargs in bad_configs:
         params = {"iterations": 1, **kwargs}
@@ -485,6 +764,7 @@ def test_validation_game_scores_candidate_result_from_candidate_perspective():
     assert result == ValidationResult(wins=1, losses=0, draws=0)
     assert result.score == 1.0
     assert result.passed is True
+    assert result.wins_more_than_losses is True
 
 
 def test_validation_game_can_score_candidate_loss_as_black():
@@ -498,6 +778,7 @@ def test_validation_game_can_score_candidate_loss_as_black():
     assert result == ValidationResult(wins=0, losses=1, draws=0)
     assert result.score == 0.0
     assert result.passed is False
+    assert result.wins_more_than_losses is False
 
 
 def test_validation_passes_history_to_players():
@@ -555,8 +836,12 @@ def test_modal_remote_can_report_checkpoint_validation():
         validate_random=True,
         validation_games=2,
         validation_max_plies=1,
+        validation_simulations=1,
         seed=1,
         checkpoint_dir=None,
     )
 
+    assert summary["validation_simulations"] == 1
+    assert summary["initial_validation"]["random_games"] == 2
+    assert summary["initial_validation"]["random_wins_more_than_losses"] is False
     assert "checkpoint_validations" not in summary

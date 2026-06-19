@@ -94,6 +94,8 @@ def play_self_game(
     simulations: int = 64,
     max_plies: int | None = None,
     temperature: float = 1.0,
+    final_temperature: float | None = None,
+    temperature_drop_plies: int | None = None,
     seed: int | None = None,
     starting_board: chess.Board | None = None,
 ) -> SelfPlayGame:
@@ -106,6 +108,12 @@ def play_self_game(
 
     if max_plies is not None and max_plies <= 0:
         raise ValueError("max_plies must be positive or None")
+    if temperature < 0:
+        raise ValueError("temperature must be non-negative")
+    if final_temperature is not None and final_temperature < 0:
+        raise ValueError("final_temperature must be non-negative or None")
+    if temperature_drop_plies is not None and temperature_drop_plies < 0:
+        raise ValueError("temperature_drop_plies must be non-negative or None")
 
     board = starting_board.copy(stack=True) if starting_board is not None else chess.Board()
     rng = random.Random(seed)
@@ -120,7 +128,13 @@ def play_self_game(
             raise RuntimeError("non-terminal self-play game reached safety cap")
         policy = mcts.search_policy(board, add_root_noise=True)
         pending.append((board.copy(stack=True), policy))
-        board.push(chess.Move.from_uci(sample_policy(policy, temperature, rng)))
+        move_temperature = _temperature_for_ply(
+            ply=plies,
+            initial_temperature=temperature,
+            final_temperature=final_temperature,
+            temperature_drop_plies=temperature_drop_plies,
+        )
+        board.push(chess.Move.from_uci(sample_policy(policy, move_temperature, rng)))
         plies += 1
 
     result = board.result(claim_draw=True)
@@ -134,6 +148,17 @@ def play_self_game(
         for example_board, policy in pending
     ]
     return SelfPlayGame(examples=examples, stats=GameStats(len(pending), result))
+
+
+def _temperature_for_ply(
+    ply: int,
+    initial_temperature: float,
+    final_temperature: float | None,
+    temperature_drop_plies: int | None,
+) -> float:
+    if final_temperature is None or temperature_drop_plies is None:
+        return initial_temperature
+    return final_temperature if ply >= temperature_drop_plies else initial_temperature
 
 
 def mirror_move_uci(uci: str) -> str:

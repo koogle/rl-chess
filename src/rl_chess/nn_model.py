@@ -201,14 +201,24 @@ class PolicyValueNet(nn.Module):
     def policy_loss(cls, logits: torch.Tensor, examples: list[TrainingExample]) -> torch.Tensor:
         """Cross entropy over legal/search moves only, matching PUCT inference."""
 
-        losses = []
+        max_moves = max(len(example.policy_target) for example in examples)
+        indices = torch.zeros((len(examples), max_moves), dtype=torch.long, device=logits.device)
+        targets = torch.zeros((len(examples), max_moves), dtype=torch.float32, device=logits.device)
+        mask = torch.zeros((len(examples), max_moves), dtype=torch.bool, device=logits.device)
+
         for row, example in enumerate(examples):
             moves = tuple(example.policy_target)
-            indices = torch.tensor([cls.action_index(move) for move in moves], dtype=torch.long, device=logits.device)
-            target = torch.tensor([example.policy_target[move] for move in moves], dtype=torch.float32, device=logits.device)
-            target = target / target.sum()
-            losses.append(-(target * F.log_softmax(logits[row, indices], dim=0)).sum())
-        return torch.stack(losses).mean()
+            row_indices = [cls.action_index(move) for move in moves]
+            row_targets = [example.policy_target[move] for move in moves]
+            width = len(moves)
+            indices[row, :width] = torch.tensor(row_indices, dtype=torch.long, device=logits.device)
+            targets[row, :width] = torch.tensor(row_targets, dtype=torch.float32, device=logits.device)
+            mask[row, :width] = True
+
+        targets = targets / targets.sum(dim=1, keepdim=True)
+        gathered_logits = logits.gather(1, indices).masked_fill(~mask, -torch.inf)
+        log_probs = F.log_softmax(gathered_logits, dim=1).masked_fill(~mask, 0.0)
+        return -(targets * log_probs).sum(dim=1).mean()
 
 
 def train_batch(

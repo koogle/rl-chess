@@ -248,3 +248,182 @@ print("FINAL_SUMMARY " + json.dumps(summary, sort_keys=True), flush=True)
 - Interpretation: the flat 1,000-game random-validation curve is not primarily evidence that gradient descent cannot fit; the loop is mostly distilling low-simulation self-search from long drawish games, with very little decisive signal and validation mostly measuring capped-draw noise.
 - Instrumentation change: training metrics now record cumulative and per-iteration result counts plus average plies, and validation results distinguish capped draws from true terminal draws.
 - Verification: `uv run pytest -q` passed with `32 passed, 2 warnings`.
+
+### 2026-06-18 16:11:39 PDT — Refocused on full-start self-play versus weakest Stockfish
+
+- Correction: the earlier KQK mate-in-one curriculum result does not satisfy the project goal. The target is now stated as normal starting-position games, self-play-only training, no curriculum learning, no replay, and a validation gate of `wins > losses` against weakest Stockfish.
+- Methodology change: added an AlphaZero-style temperature schedule for self-play (`temperature`, `final_temperature`, `temperature_drop_plies`), optional draw-game down-weighting for fresh self-play batches (`draw_training_weight`), and explicit `wins_more_than_losses` validation fields in local/Modal results. These changes keep the data source as fresh self-play and do not add replay or external teachers.
+- Full-start self-play diagnostic command: `uv run python - <<'PY' ... generate_self_play_batch(PolicyValueNet(hidden_channels=16, residual_blocks=1), games=6, simulations in {2,4}, max_plies=None, temperature=1.0, self_play_workers=1) ... PY`
+- Diagnostic result: with `simulations=2`, self-play produced `1` white win, `1` black win, and `4` draws over `6` full-start terminal games; value targets were `1193` draw positions versus `355` decisive positions. With `simulations=4`, self-play produced `1` white win and `5` draws; value targets were `1866` draw positions versus `129` decisive positions.
+- Full-start smoke command: `uv run python - <<'PY' ... train(PolicyValueNet(hidden_channels=16, residual_blocks=1), iterations=2, games_per_iteration=2, simulations=2, train_steps=2, temperature=1.0, final_temperature=0.0, temperature_drop_plies=30, draw_training_weight=0.0, seed=20260618) ... validate_model_against_stockfish(..., elo=1, games=2, max_plies=120, simulations=2, stockfish_movetime=0.001) ... PY`
+- Full-start smoke result: training ran `4` normal-start self-play games, `1025` raw examples, `342` color-augmented training examples after excluding draw games, `result_counts={"1-0": 1, "1/2-1/2": 3}`, and `2` optimizer updates. Weakest-Stockfish validation remained `0W/2L/0D`, score `0.0`, `wins_more_than_losses=False`.
+- Interpretation: the current self-play-only loop still does not beat weakest Stockfish from the normal start. The new knobs make the real gate measurable and reduce draw-target swamping, but larger full-start self-play runs are still required before this can be considered solved.
+- Verification: `uv run pytest -q` passed with `34 passed, 2 warnings`.
+
+### 2026-06-18 16:21:36 PDT — Bounded PUCT history copy and replacement full-start run
+
+- Performance change: PUCT tree expansion now copies the last `100` plies of board history instead of the full move stack for every child. This preserves recent repetition/fifty-move draw context through `python-chess` while reducing long full-start self-play copy cost.
+- Local speed smoke command: `uv run python - <<'PY' ... generate_self_play_batch(PolicyValueNet(hidden_channels=16, residual_blocks=1), games=2, simulations=4, max_plies=None, temperature=1.0, final_temperature=0.0, temperature_drop_plies=30, seed_offset=42, self_play_workers=1) ... PY`
+- Local speed smoke result: `2` full-start terminal self-play games completed in `12.62s`, both draws, with plies `[386, 376]`.
+- Stopped stale pre-optimization Modal app `ap-vOsYMDNTzuEDQyzYbeSMNS`, which had not written `/checkpoints/fullstart-selfplay-decisive-20260618-1612`.
+- Replacement Modal launch command: `uv run modal run --detach src/rl_chess/modal_app.py::main --iterations 20 --games-per-iteration 16 --simulations 8 --train-steps 64 --batch-size 1024 --learning-rate 0.001 --temperature 1.0 --final-temperature 0.0 --temperature-drop-plies 30 --hidden-channels 32 --residual-blocks 2 --checkpoint-dir /checkpoints/fullstart-selfplay-decisive-20260618-1640 --validate-stockfish --stockfish-elo 1 --validation-games 10 --validation-max-plies 300 --validation-simulations 8 --stockfish-movetime 0.001 --no-validate-each-checkpoint --draw-training-weight 0.0 --seed 20260618 --self-play-workers 8`
+- Modal run: https://modal.com/apps/koogle-frick/main/ap-zqAx1lNl7JyibC2KYwoK1v; function call `fc-01KVEGK8M4C7NNACRXJERX1NP4`; checkpoint dir `/checkpoints/fullstart-selfplay-decisive-20260618-1640`.
+- Status at launch: active detached run, final Stockfish result pending.
+- Verification: `uv run pytest -q` passed with `35 passed, 2 warnings`.
+
+### 2026-06-18 16:26:44 PDT — Process-based self-play workers
+
+- Performance change: multi-worker self-play now uses `ProcessPoolExecutor` instead of `ThreadPoolExecutor`, with a `fork` multiprocessing context where available. The chess/MCTS loop is Python-heavy, so process workers are needed to use Modal's requested CPUs effectively.
+- Local process-worker smoke command: `uv run python - <<'PY' ... generate_self_play_batch(PolicyValueNet(hidden_channels=8, residual_blocks=0), games=2, simulations=1, max_plies=None, temperature=1.0, final_temperature=0.0, temperature_drop_plies=10, seed_offset=99, self_play_workers=2) ... PY`
+- Local process-worker smoke result: `2` normal-start terminal self-play games completed through process workers; both were draws with plies `[403, 389]`.
+- Stopped stale thread-worker Modal app `ap-zqAx1lNl7JyibC2KYwoK1v`.
+- Replacement Modal launch command: `uv run modal run --detach src/rl_chess/modal_app.py::main --iterations 20 --games-per-iteration 32 --simulations 8 --train-steps 64 --batch-size 1024 --learning-rate 0.001 --temperature 1.0 --final-temperature 0.0 --temperature-drop-plies 30 --hidden-channels 32 --residual-blocks 2 --checkpoint-dir /checkpoints/fullstart-selfplay-process-20260618-1710 --validate-stockfish --stockfish-elo 1 --validation-games 10 --validation-max-plies 300 --validation-simulations 8 --stockfish-movetime 0.001 --no-validate-each-checkpoint --draw-training-weight 0.0 --seed 20260618 --self-play-workers 8`
+- Modal run: https://modal.com/apps/koogle-frick/main/ap-9CobGw4Lhy8QOM7rHBpKcY; function call `fc-01KVEGW2FC542Q25X3PMB4N916`; checkpoint dir `/checkpoints/fullstart-selfplay-process-20260618-1710`.
+- Status at launch: active detached run, final Stockfish result pending.
+- Verification: `uv run pytest -q` passed with `35 passed, 2 warnings`.
+
+### 2026-06-18 16:40:08 PDT — Full-start all-draw fallback and observable remote validation
+
+- Methodology change: added `min_draw_games_for_training` so fresh self-play batches still produce optimizer updates when every normal-start game is a draw and `draw_training_weight=0.0`. Decisive games remain preferred whenever present; this does not add replay, curriculum starts, or external teacher data.
+- Observability change: Modal training now emits `validation_event` lines around initial and final validation plus `training_event` lifecycle lines around each self-play/training phase, so long full-start runs can be inspected before summaries are written.
+- Failed capped smoke command:
+```bash
+uv run python - <<'PY'
+from rl_chess.nn_model import PolicyValueNet
+from rl_chess.train import train
+
+events = []
+metrics = train(
+    model=PolicyValueNet(hidden_channels=8, residual_blocks=0),
+    iterations=1,
+    games_per_iteration=2,
+    simulations=1,
+    train_steps=1,
+    batch_size=32,
+    max_plies=12,
+    temperature=1.0,
+    final_temperature=0.0,
+    temperature_drop_plies=10,
+    draw_training_weight=0.0,
+    min_draw_games_for_training=1,
+    self_play_workers=2,
+    seed=20260618,
+    event_callback=events.append,
+)
+print({
+    "games": metrics.games,
+    "examples": metrics.examples,
+    "training_examples": metrics.training_examples,
+    "result_counts": metrics.result_counts,
+    "loss_updates": len(metrics.loss_curve),
+    "event_phases": [event["phase"] for event in events],
+})
+PY
+```
+- Failed capped smoke result: the full-start self-play games hit `RuntimeError: non-terminal self-play game reached safety cap`. Interpretation: full-start training/evaluation smokes must play to terminal outcomes rather than turning short truncations into draw targets.
+- Uncapped local worker smoke command:
+```bash
+uv run python - <<'PY'
+from rl_chess.nn_model import PolicyValueNet
+from rl_chess.train import train
+
+events = []
+metrics = train(
+    model=PolicyValueNet(hidden_channels=8, residual_blocks=0),
+    iterations=1,
+    games_per_iteration=2,
+    simulations=1,
+    train_steps=1,
+    batch_size=32,
+    temperature=1.0,
+    final_temperature=0.0,
+    temperature_drop_plies=10,
+    draw_training_weight=0.0,
+    min_draw_games_for_training=1,
+    self_play_workers=2,
+    seed=20260618,
+    event_callback=events.append,
+)
+print({
+    "games": metrics.games,
+    "examples": metrics.examples,
+    "training_examples": metrics.training_examples,
+    "result_counts": metrics.result_counts,
+    "loss_updates": len(metrics.loss_curve),
+    "event_phases": [event["phase"] for event in events],
+})
+PY
+```
+- Uncapped local worker smoke result: `2` normal-start terminal games, both draws, `585` examples, `444` color-augmented training examples from the fallback draw game, `1` optimizer update, and lifecycle events `self_play_start`, `self_play_complete`, `train_updates_complete`.
+- Remote smoke command: `uv run modal run src/rl_chess/modal_app.py::main --iterations 1 --games-per-iteration 2 --simulations 1 --train-steps 1 --batch-size 32 --hidden-channels 8 --residual-blocks 0 --temperature 1.0 --final-temperature 0.0 --temperature-drop-plies 10 --draw-training-weight 0.0 --min-draw-games-for-training 1 --self-play-workers 2 --seed 20260618 --wait`
+- Remote smoke result: Modal function call `fc-01KVEHA14EVWA31HJN1V9H3G6H` completed with `2` normal-start terminal games, both draws, `688` examples, `534` fallback training examples, `1` optimizer update, and `loss_curve=[2.8246209621429443]`.
+- Stockfish baseline sanity check: random lost `10/10` and first-legal lost `9/10` with one draw against `StockfishPlayer(elo=1, movetime=0.001)`, so the weakest configured Stockfish baseline still requires non-trivial chess strength.
+- Replacement Modal launch command: `uv run modal run --detach src/rl_chess/modal_app.py::main --iterations 20 --games-per-iteration 32 --simulations 8 --train-steps 64 --batch-size 1024 --learning-rate 0.001 --temperature 1.0 --final-temperature 0.0 --temperature-drop-plies 30 --hidden-channels 32 --residual-blocks 2 --checkpoint-dir /checkpoints/fullstart-selfplay-mindraw-20260618-1635 --validate-stockfish --stockfish-elo 1 --validation-games 10 --validation-max-plies 300 --validation-simulations 8 --stockfish-movetime 0.001 --no-validate-each-checkpoint --draw-training-weight 0.0 --min-draw-games-for-training 4 --seed 20260618 --self-play-workers 8`
+- Modal run: https://modal.com/apps/koogle-frick/main/ap-hu7pddQ075duQR6gy5xjMC; function call `fc-01KVEHNP30DPH81648H90RW05A`; checkpoint dir `/checkpoints/fullstart-selfplay-mindraw-20260618-1635`.
+- Initial validation result: untrained model scored `0W/7L/3D`, score `0.15`, `wins_more_than_losses=False` against weakest Stockfish before training.
+- Iteration 1 self-play result: `32` full-start games produced `7323` raw examples and `2816` selected training examples, with `result_counts={"1-0": 6, "1/2-1/2": 20, "0-1": 6}` and average plies `228.84375`.
+- Status at last check: active detached run after iteration 1 self-play, training update/checkpoint pending, final `wins > losses` result pending.
+- Verification: `uv run pytest -q` passed with `37 passed, 2 warnings`.
+
+### 2026-06-18 16:48:42 PDT — GPU-backed training updates for full-start self-play
+
+- Performance change: Modal training now requests a `T4` GPU, and the shared training loop accepts `training_device` with `auto` resolving to CUDA when available. Checkpoints store CPU state dicts for portable reloads, and CUDA training uses a spawned self-play process context to avoid forking after CUDA initialization. This keeps the data path as fresh full-start self-play only.
+- Stale CPU-run stop command: `uv run modal app stop --yes ap-hu7pddQ075duQR6gy5xjMC`.
+- CUDA smoke command: `uv run modal run src/rl_chess/modal_app.py::main --iterations 1 --games-per-iteration 1 --simulations 1 --train-steps 1 --batch-size 16 --hidden-channels 8 --residual-blocks 0 --temperature 1.0 --final-temperature 0.0 --temperature-drop-plies 10 --draw-training-weight 0.0 --min-draw-games-for-training 1 --self-play-workers 1 --seed 20260618 --training-device auto --wait`
+- CUDA smoke result: Modal function call `fc-01KVEJ41CRNBD3YD131WACK4SS` completed one normal-start terminal draw with `training_device=cuda`; the single optimizer update took `0.9778186650000009s`.
+- CUDA process-worker smoke command: `uv run modal run src/rl_chess/modal_app.py::main --iterations 1 --games-per-iteration 2 --simulations 1 --train-steps 1 --batch-size 16 --hidden-channels 8 --residual-blocks 0 --temperature 1.0 --final-temperature 0.0 --temperature-drop-plies 10 --draw-training-weight 0.0 --min-draw-games-for-training 1 --self-play-workers 2 --seed 20260618 --training-device auto --wait`
+- CUDA process-worker smoke result: Modal function call `fc-01KVEJ50EH9Z4K8SRC0S9Y59YG` completed two normal-start terminal draws with `training_device=cuda`; spawned self-play workers completed in `12.287261545999998s`, and the single optimizer update took `1.7486199790000008s`.
+- Replacement Modal launch command: `uv run modal run --detach src/rl_chess/modal_app.py::main --iterations 20 --games-per-iteration 32 --simulations 8 --train-steps 64 --batch-size 1024 --learning-rate 0.001 --temperature 1.0 --final-temperature 0.0 --temperature-drop-plies 30 --hidden-channels 32 --residual-blocks 2 --checkpoint-dir /checkpoints/fullstart-selfplay-cuda-20260618-1649 --validate-stockfish --stockfish-elo 1 --validation-games 10 --validation-max-plies 300 --validation-simulations 8 --stockfish-movetime 0.001 --no-validate-each-checkpoint --draw-training-weight 0.0 --min-draw-games-for-training 4 --training-device auto --seed 20260618 --self-play-workers 8`
+- Modal run: https://modal.com/apps/koogle-frick/main/ap-PQa2OXN0Ed6jm7PQ4xfjZJ; function call `fc-01KVEJ6EZK9R76RR94FFGF6TFH`; checkpoint dir `/checkpoints/fullstart-selfplay-cuda-20260618-1649`.
+- Initial validation result: untrained model scored `0W/10L/0D`, score `0.0`, `wins_more_than_losses=False` against weakest Stockfish before training.
+- Status at launch: active detached run in iteration 1 self-play with `training_device=cuda`; final `wins > losses` result pending.
+- Verification: `uv run pytest -q` passed with `38 passed, 2 warnings`.
+
+### 2026-06-18 16:57:46 PDT — Vectorized legal-policy loss and checkpoint persistence
+
+- Performance change: vectorized `PolicyValueNet.policy_loss` across the batch while preserving the same legal/search-move cross entropy target. This removes the per-example Python softmax loop from every optimizer step and keeps the target purely self-play PUCT visit distributions.
+- Durability change: Modal now commits the checkpoint volume after each `checkpoint_progress` event so intermediate checkpoints are available even if a long detached run is stopped before final summary writing.
+- Stopped stale run command: `uv run modal app stop --yes ap-PQa2OXN0Ed6jm7PQ4xfjZJ`.
+- Stale run result before stop: initial weakest-Stockfish validation was `0W/10L/0D`; iteration 1 self-play completed with `11027` raw examples, `788` selected training examples, `result_counts={"1/2-1/2": 28, "0-1": 2, "1-0": 2}`, average plies `344.59375`; 64 training updates took `83.39013720200003s`, and checkpoint `/checkpoints/fullstart-selfplay-cuda-20260618-1649/iteration-0001.pt` was written inside the still-running container but not visible through the volume before final commit.
+- Vectorized-loss verification command: `uv run pytest -q tests/test_core.py::test_policy_loss_matches_manual_legal_move_cross_entropy tests/test_core.py::test_policy_value_trainer_reduces_loss_on_repeated_target`
+- Vectorized-loss verification result: `2 passed`.
+- Full verification command: `uv run pytest -q`
+- Full verification result: `39 passed, 2 warnings`.
+- CUDA process-worker smoke command: `uv run modal run src/rl_chess/modal_app.py::main --iterations 1 --games-per-iteration 8 --simulations 8 --train-steps 1 --batch-size 128 --hidden-channels 16 --residual-blocks 1 --temperature 1.0 --final-temperature 0.0 --temperature-drop-plies 30 --draw-training-weight 0.0 --min-draw-games-for-training 2 --self-play-workers 8 --seed 20260618 --training-device auto --wait`
+- CUDA process-worker smoke result: Modal function call `fc-01KVEJMFQSHM952TKH46PA25YT` completed `8` normal-start terminal games with `training_device=cuda`; self-play took `43.591788909s`, and the single optimizer update took `2.1119762530000017s`.
+- Replacement Modal launch command: `uv run modal run --detach src/rl_chess/modal_app.py::main --iterations 20 --games-per-iteration 32 --simulations 8 --train-steps 64 --batch-size 1024 --learning-rate 0.001 --temperature 1.0 --final-temperature 0.0 --temperature-drop-plies 30 --hidden-channels 32 --residual-blocks 2 --checkpoint-dir /checkpoints/fullstart-selfplay-vectorized-20260618-1658 --validate-stockfish --stockfish-elo 1 --validation-games 10 --validation-max-plies 300 --validation-simulations 8 --stockfish-movetime 0.001 --no-validate-each-checkpoint --draw-training-weight 0.1 --min-draw-games-for-training 4 --training-device auto --seed 20260618 --self-play-workers 8`
+- Modal run: https://modal.com/apps/koogle-frick/main/ap-3IDM5dg6ChzrjowDJhKz5z; function call `fc-01KVEJR5BMQWPMWJACASMPNRCB`; checkpoint dir `/checkpoints/fullstart-selfplay-vectorized-20260618-1658`.
+- Initial validation result: untrained model scored `0W/8L/2D`, score `0.1`, `wins_more_than_losses=False` against weakest Stockfish before training.
+- Status at launch: active detached run in iteration 1 self-play with `training_device=cuda`, final `wins > losses` result pending.
+
+### 2026-06-18 17:03:24 PDT — Per-game self-play scheduling and first vectorized checkpoint
+
+- Operational change: multi-worker self-play now schedules one game per future and emits `self_play_game_complete` lifecycle events. This keeps the same full-start self-play data source and target, but avoids opaque multi-game worker chunks and makes long batches inspectable while they run.
+- Active run iteration 1 result: Modal function call `fc-01KVEJR5BMQWPMWJACASMPNRCB` completed iteration 1 with `8986` raw examples, `4374` selected training examples, `result_counts={"1/2-1/2": 20, "0-1": 4, "1-0": 8}`, average plies `280.8125`, and `training_device=cuda`.
+- Active run training result: 64 updates took `25.757469635000007s`; latest loss `3.5037975311279297`, policy loss `3.0354602336883545`, value loss `0.4683372974395752`.
+- Checkpoint verification command: `uv run modal volume ls rl-chess-checkpoints /fullstart-selfplay-vectorized-20260618-1658`
+- Checkpoint verification result: `fullstart-selfplay-vectorized-20260618-1658/iteration-0001.pt` is visible in the Modal volume after per-checkpoint volume commit.
+- Verification command: `uv run pytest -q`
+- Verification result: `39 passed, 2 warnings`.
+- Status at last check: active detached run in iteration 2 self-play, final `wins > losses` result pending.
+
+### 2026-06-18 17:07:56 PDT — Early checkpoint Stockfish diagnostics
+
+- Checkpoint download commands: `uv run modal volume get rl-chess-checkpoints /fullstart-selfplay-vectorized-20260618-1658/iteration-0001.pt /tmp/rl-chess-checkpoints/iteration-0001.pt`; `uv run modal volume get rl-chess-checkpoints /fullstart-selfplay-vectorized-20260618-1658/iteration-0002.pt /tmp/rl-chess-checkpoints/iteration-0002.pt`; `uv run modal volume get rl-chess-checkpoints /fullstart-selfplay-vectorized-20260618-1658/iteration-0003.pt /tmp/rl-chess-checkpoints/iteration-0003.pt`.
+- Checkpoint 1 validation command: `uv run python -c "from rl_chess.train import load_checkpoint_model; from rl_chess.validation import validate_model_against_stockfish; model = load_checkpoint_model('/tmp/rl-chess-checkpoints/iteration-0001.pt'); result = validate_model_against_stockfish(model, elo=1, games=6, max_plies=300, simulations=8, stockfish_movetime=0.001, seed=20260619); print({'wins': result.wins, 'losses': result.losses, 'draws': result.draws, 'capped_draws': result.capped_draws, 'score': result.score, 'wins_more_than_losses': result.wins_more_than_losses})"`
+- Checkpoint 1 result: `0W/5L/1D`, score `0.08333333333333333`, `wins_more_than_losses=False`.
+- Checkpoint 2 validation command: `uv run python -c "from rl_chess.train import load_checkpoint_model; from rl_chess.validation import validate_model_against_stockfish; model = load_checkpoint_model('/tmp/rl-chess-checkpoints/iteration-0002.pt'); result = validate_model_against_stockfish(model, elo=1, games=6, max_plies=300, simulations=8, stockfish_movetime=0.001, seed=20260620); print({'wins': result.wins, 'losses': result.losses, 'draws': result.draws, 'capped_draws': result.capped_draws, 'score': result.score, 'wins_more_than_losses': result.wins_more_than_losses})"`
+- Checkpoint 2 result: `0W/3L/3D`, score `0.25`, `wins_more_than_losses=False`.
+- Checkpoint 3 validation command: `uv run python -c "from rl_chess.train import load_checkpoint_model; from rl_chess.validation import validate_model_against_stockfish; model = load_checkpoint_model('/tmp/rl-chess-checkpoints/iteration-0003.pt'); result = validate_model_against_stockfish(model, elo=1, games=6, max_plies=300, simulations=8, stockfish_movetime=0.001, seed=20260621); print({'wins': result.wins, 'losses': result.losses, 'draws': result.draws, 'capped_draws': result.capped_draws, 'score': result.score, 'wins_more_than_losses': result.wins_more_than_losses})"`
+- Checkpoint 3 result: `0W/4L/2D`, score `0.16666666666666666`, `wins_more_than_losses=False`.
+- Higher-search spot checks: checkpoint 1 at `simulations=16` scored `0W/3L/1D` and at `simulations=32` scored `0W/4L/0D`; checkpoint 2 at `simulations=16` and `32` both scored `0W/4L/0D`.
+- Interpretation: the first three checkpoints do not satisfy the goal. Checkpoint 2 improved the draw rate at the run's validation budget, but no checkpoint has produced a Stockfish win yet.
+
+### 2026-06-18 17:12:05 PDT — Value-loss weighting after draw collapse
+
+- Methodology change: exposed `value_loss_weight` through the shared training loop and Modal runner. This keeps the data source self-play-only, but allows follow-up runs to put more gradient pressure on decisive terminal outcomes instead of mostly imitating draw-heavy policies.
+- Stopped draw-collapsed run command: `uv run modal app stop --yes ap-3IDM5dg6ChzrjowDJhKz5z`.
+- Stopped run result: by checkpoint 8 the active run had cumulative `result_counts={"1/2-1/2": 216, "0-1": 24, "1-0": 16}` and iteration 8 itself was all draws. Checkpoint 8 validation command: `uv run python -c "from rl_chess.train import load_checkpoint_model; from rl_chess.validation import validate_model_against_stockfish; model = load_checkpoint_model('/tmp/rl-chess-checkpoints/iteration-0008.pt'); result = validate_model_against_stockfish(model, elo=1, games=8, max_plies=300, simulations=8, stockfish_movetime=0.001, seed=20260628); print({'wins': result.wins, 'losses': result.losses, 'draws': result.draws, 'capped_draws': result.capped_draws, 'score': result.score, 'wins_more_than_losses': result.wins_more_than_losses})"`.
+- Checkpoint 8 validation result: `0W/6L/2D`, score `0.125`, `wins_more_than_losses=False`.
+- Verification command: `uv run pytest -q`.
+- Verification result: `40 passed, 2 warnings`.
